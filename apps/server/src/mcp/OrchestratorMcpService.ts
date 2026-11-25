@@ -1477,6 +1477,24 @@ const make = Effect.gen(function* () {
     return { scope: threadScope, parent } as const;
   });
 
+  /** The model a manual worker policy pins delegated tasks of this thread to, if any. */
+  const manualWorkerSelection = (thread: OrchestrationV2ThreadProjection["thread"]) =>
+    thread.lineage?.orchestrator === true && thread.orchestratorWorkerPolicy?.mode === "manual"
+      ? thread.orchestratorWorkerPolicy.modelSelection
+      : undefined;
+
+  /** Manual worker target fields overlaid on a task's target; empty in auto mode. */
+  const manualWorkerTargetFields = (
+    manualWorker: ReturnType<typeof manualWorkerSelection>,
+  ): Pick<OrchestratorMcpTarget, "providerInstanceId" | "model" | "options"> =>
+    manualWorker === undefined
+      ? {}
+      : {
+          providerInstanceId: manualWorker.instanceId,
+          model: manualWorker.model,
+          ...(manualWorker.options === undefined ? {} : { options: manualWorker.options }),
+        };
+
   const resolveProjectTarget = (
     parent: Pick<OrchestrationV2ThreadProjection, "thread"> | undefined,
     projectId: ProjectId | undefined,
@@ -2924,10 +2942,16 @@ const make = Effect.gen(function* () {
       if (input.target !== undefined && environmentId !== undefined) {
         yield* requireCapability(callerScope);
         const scope = yield* requireThreadScope(callerScope, "delegate_task");
+        const parent = yield* loadCallerRecords(scope.thread.threadId, ["runs"]);
         // The task's child runs as an ordinary thread there; this thread keeps the task.
+        // A manual worker policy applies there too, so the linked worker runs the selected model.
         const { taskId } = yield* remoteDelegation.delegate(scope, {
           ...input,
-          target: { ...input.target, environmentId },
+          target: {
+            ...input.target,
+            environmentId,
+            ...manualWorkerTargetFields(manualWorkerSelection(parent.thread)),
+          },
         });
         return yield* input.mode === "wait"
           ? awaitTask(scope, taskId, taskId, input.timeoutMs)
@@ -2964,19 +2988,9 @@ const make = Effect.gen(function* () {
         operation: "delegate-task",
       });
       const isRetryOfAcceptedDelegation = yield* threadManagement.hasReceipt(commandId);
-      const manualWorker =
-        parent.thread.lineage?.orchestrator === true &&
-        parent.thread.orchestratorWorkerPolicy?.mode === "manual"
-          ? parent.thread.orchestratorWorkerPolicy.modelSelection
-          : undefined;
+      const manualWorker = manualWorkerSelection(parent.thread);
       const effectiveTarget: OrchestratorMcpTarget | undefined =
-        manualWorker !== undefined
-          ? {
-              providerInstanceId: manualWorker.instanceId,
-              model: manualWorker.model,
-              ...(manualWorker.options === undefined ? {} : { options: manualWorker.options }),
-            }
-          : input.target;
+        manualWorker !== undefined ? manualWorkerTargetFields(manualWorker) : input.target;
       const target = yield* resolveTargetRechecking({
         parent,
         target: effectiveTarget,
