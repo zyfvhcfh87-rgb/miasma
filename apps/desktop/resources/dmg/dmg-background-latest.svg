@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="864" viewBox="0 0 640 432">
+  <defs>
+    <radialGradient id="aura" cx="50%" cy="46%" r="60%">
+      <stop offset="0%" stop-color="#3b2667" stop-opacity="0.45"/>
+      <stop offset="55%" stop-color="#171324" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#0c0b12" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="veil" x1="0" y1="0" x2="1" y2="0">
+      <stop stop-color="#6d28d9" stop-opacity="0.12"/>
+      <stop offset=".5" stop-color="#a78bfa" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#4f46e5" stop-opacity="0.12"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="432" fill="#0d0c14"/>
+  <rect width="640" height="432" fill="url(#aura)"/>
+  <path d="M-60 293C95 220 214 304 362 256S559 191 707 257" stroke="url(#veil)" stroke-width="110" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <svg x="32" y="22" width="24" height="20" viewBox="0 0 24 20">
+    <path d="M2.5 2H5.8L12 7.8L18.2 2H21.5L12 10.8L2.5 2Z" fill="#a78bfa"/>
+    <path d="M2.5 5.6L12 14.2L21.5 5.6V18H18.5V10.8L12 16.7L5.5 10.8V18H2.5V5.6Z" fill="#f5f3ff"/>
+  </svg>
+  <text x="64" y="38" fill="#e5e7eb" font-family="Helvetica, -apple-system, sans-serif" font-size="14" font-weight="600" letter-spacing="-0.2">Miasma</text>
+  <text x="320" y="104" fill="#f5f3ff" font-family="Helvetica, -apple-system, sans-serif" font-size="22" font-weight="700" text-anchor="middle">Drag Miasma into Applications.</text>
+  <path d="M270 204Q320 179 370 204M358 190L370 204L351 209" stroke="#a78bfa" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="320" y="367" fill="#9ca3af" font-family="Helvetica, -apple-system, sans-serif" font-size="12" font-weight="400" text-anchor="middle">Once copied, open it from Applications.</text>
+</svg>

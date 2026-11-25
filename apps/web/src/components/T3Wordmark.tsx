@@ -1,0 +1,13 @@
+import type { SVGProps } from "react";
+
+export function T3Wordmark(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...props} viewBox="0 0 24 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M2.5 2H5.8L12 7.8L18.2 2H21.5L12 10.8L2.5 2Z" fill="currentColor" opacity="0.72" />
+      <path
+        d="M2.5 5.6L12 14.2L21.5 5.6V18H18.5V10.8L12 16.7L5.5 10.8V18H2.5V5.6Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}

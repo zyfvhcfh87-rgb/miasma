@@ -1,0 +1,48 @@
+name: Release Miasma Desktop
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  macos-arm64:
+    name: Build macOS (arm64)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Vite+
+        run: |
+          curl -fsSL https://vite.plus | bash
+          echo "$HOME/.local/share/vite-plus/bin" >> "$GITHUB_PATH"
+
+      - name: Install dependencies
+        run: vp install
+
+      - name: Build Miasma macOS DMG + Auto-Update ZIP
+        env:
+          T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
+        run: vp run dist:desktop:dmg:arm64
+
+      - name: Publish GitHub Release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/*.dmg release/*.zip release/latest-mac.yml --clobber
+          else
+            gh release create "$TAG" release/*.dmg release/*.zip release/latest-mac.yml \
+              --title "Miasma $TAG" \
+              --generate-notes
+          fi
