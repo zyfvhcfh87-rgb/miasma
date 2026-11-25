@@ -15816,6 +15816,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           occurredAt: now,
           payload: resultTransfer,
         },
+        ...(yield* linkedOrchestratorTaskEvents(parentThreadId, task.id, terminalStatus, now)),
       ];
       yield* writeSystemEvents(completionEvents, [], { updateDelegatedCompletionOnly: true });
       yield* releaseFinishedDelegateSessions(childThreadId, childRun.id, task.id);
@@ -15823,6 +15824,53 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (completionPlan.offer && completionPlan.parentRun !== undefined) {
         yield* offerDelegatedCompletionDelivery(parentThreadId, completionPlan.parentRun.id);
       }
+    },
+  );
+
+  // Moves persisted orchestrator board rows linked to a finished app-owned subagent out of
+  // in_progress/planned so shell counts and `t3_task_board` match the live subagent state.
+  const linkedOrchestratorTaskEvents = Effect.fn("Orchestrator.linkedOrchestratorTaskEvents")(
+    function* (
+      parentThreadId: ThreadId,
+      subagentId: OrchestrationV2Subagent["id"],
+      status: OrchestrationV2Subagent["status"],
+      now: DateTime.Utc,
+    ) {
+      const parentThread = yield* projectionStore
+        .getThread(parentThreadId)
+        .pipe(Effect.orElseSucceed(() => undefined));
+      const existing = parentThread?.orchestratorTasks;
+      if (parentThread === undefined || existing === undefined || existing.length === 0) {
+        return [] as ReadonlyArray<Omit<OrchestrationV2DomainEvent, "id">>;
+      }
+      const nextStatus =
+        status === "completed"
+          ? ("for_review" as const)
+          : status === "failed"
+            ? ("needs_attention" as const)
+            : ("cancelled" as const);
+      const nowIso = DateTime.formatIso(now);
+      let changed = false;
+      const orchestratorTasks = existing.map((entry) => {
+        if (entry.subagentId !== subagentId) return entry;
+        if (entry.status !== "in_progress" && entry.status !== "planned") return entry;
+        changed = true;
+        return {
+          ...entry,
+          status: nextStatus,
+          updatedAt: nowIso,
+          completedAt: nextStatus === "cancelled" ? (entry.completedAt ?? nowIso) : null,
+        };
+      });
+      if (!changed) return [] as ReadonlyArray<Omit<OrchestrationV2DomainEvent, "id">>;
+      return [
+        {
+          type: "thread.metadata-updated" as const,
+          threadId: parentThreadId,
+          occurredAt: now,
+          payload: { ...parentThread, orchestratorTasks, updatedAt: now },
+        },
+      ] as ReadonlyArray<Omit<OrchestrationV2DomainEvent, "id">>;
     },
   );
 
