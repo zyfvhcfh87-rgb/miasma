@@ -34,6 +34,8 @@ import {
   type OrchestratorMcpTarget,
   type OrchestratorMcpTaskCancelInput,
   type OrchestratorMcpTaskCancelResult,
+  type OrchestratorMcpTaskBoardInput,
+  type OrchestratorMcpTaskBoardResult,
   type OrchestratorMcpUpdateScheduledTaskInput,
   type OrchestratorMcpListScheduledTasksInput,
   type ProjectId,
@@ -193,6 +195,10 @@ export interface OrchestratorMcpServiceShape {
     scope: McpInvocationScope,
     input: OrchestratorMcpTaskCancelInput,
   ) => Effect.Effect<OrchestratorMcpTaskCancelResult, OrchestratorMcpFailure>;
+  readonly taskBoard: (
+    scope: McpInvocationScope,
+    input: OrchestratorMcpTaskBoardInput,
+  ) => Effect.Effect<OrchestratorMcpTaskBoardResult, OrchestratorMcpFailure>;
   readonly createThreads: (
     scope: McpInvocationScope,
     input: OrchestratorMcpCreateThreadsInput,
@@ -2958,9 +2964,22 @@ const make = Effect.gen(function* () {
         operation: "delegate-task",
       });
       const isRetryOfAcceptedDelegation = yield* threadManagement.hasReceipt(commandId);
+      const manualWorker =
+        parent.thread.lineage?.orchestrator === true &&
+        parent.thread.orchestratorWorkerPolicy?.mode === "manual"
+          ? parent.thread.orchestratorWorkerPolicy.modelSelection
+          : undefined;
+      const effectiveTarget: OrchestratorMcpTarget | undefined =
+        manualWorker !== undefined
+          ? {
+              providerInstanceId: manualWorker.instanceId,
+              model: manualWorker.model,
+              ...(manualWorker.options === undefined ? {} : { options: manualWorker.options }),
+            }
+          : input.target;
       const target = yield* resolveTargetRechecking({
         parent,
-        target: input.target,
+        target: effectiveTarget,
         providers,
         cwd: yield* parentWorkspaceCwd(parent),
         skipProjectEnablementFilter: isRetryOfAcceptedDelegation,
@@ -3062,6 +3081,27 @@ const make = Effect.gen(function* () {
           }
           const taskId = taskEvent.event.payload.id;
           const childThreadId = taskEvent.event.payload.childThreadId;
+          if (parent.thread.lineage?.orchestrator === true) {
+            const rawTitle = (
+              input.title ??
+              taskEvent.event.payload.title ??
+              input.task.split(/\r?\n/)[0] ??
+              "Delegated task"
+            )
+              .trim()
+              .slice(0, 140);
+            yield* threadManagement
+              .dispatch({
+                type: "thread.orchestrator-task.upsert",
+                commandId: CommandId.make(`${commandId}:orchestrator-task`),
+                threadId: scope.thread.threadId,
+                title: rawTitle.length > 0 ? rawTitle : "Delegated task",
+                status: "in_progress",
+                subagentId: taskId,
+                childThreadId,
+              })
+              .pipe(Effect.ignore);
+          }
           const childRunEvent = result.storedEvents.find(
             (stored) =>
               stored.event.type === "run.created" && stored.event.threadId === childThreadId,
@@ -3930,6 +3970,94 @@ const make = Effect.gen(function* () {
         runId: result.run.id,
         status: result.type === "already_terminal" ? result.run.status : "interrupt_requested",
       } satisfies OrchestratorMcpThreadInterruptResult;
+    }),
+    taskBoard: Effect.fn("OrchestratorMcpService.taskBoard")(function* (callerScope, input) {
+      const { scope, parent } = yield* loadThreadCaller(callerScope, "t3_task_board");
+      if (parent.thread.lineage?.orchestrator !== true) {
+        return yield* failure(
+          "invalid_request",
+          "t3_task_board is only available in project orchestrator threads.",
+        );
+      }
+      if (input.action === "list") {
+        return { tasks: parent.thread.orchestratorTasks ?? [] };
+      }
+      const key = yield* requestKey(undefined);
+      if (input.action === "set_status") {
+        if (input.taskId === undefined || input.status === undefined) {
+          return yield* failure(
+            "invalid_request",
+            "t3_task_board set_status requires both taskId and status.",
+          );
+        }
+        const exists = (parent.thread.orchestratorTasks ?? []).some(
+          (task) => task.id === input.taskId,
+        );
+        if (!exists) {
+          return yield* failure("task_not_found", `Task ${input.taskId} was not found.`);
+        }
+        yield* threadManagement
+          .dispatch({
+            type: "thread.orchestrator-task.set-status",
+            commandId: stableCommandId({
+              scope,
+              requestKey: key,
+              operation: "task-board-status",
+            }),
+            threadId: scope.thread.threadId,
+            taskId: input.taskId,
+            status: input.status,
+          })
+          .pipe(
+            Effect.mapError((error) =>
+              failure(
+                "orchestration_error",
+                `Unable to update task status: ${userFacingDispatchErrorMessage(error) ?? errorMessage(error)}`,
+              ),
+            ),
+          );
+        const refreshed = yield* loadThreadRecords(scope.thread.threadId, []);
+        const tasks = refreshed.thread.orchestratorTasks ?? [];
+        const task = tasks.find((candidate) => candidate.id === input.taskId);
+        return { tasks, ...(task === undefined ? {} : { task }) };
+      }
+      if (input.title === undefined) {
+        return yield* failure("invalid_request", "t3_task_board upsert requires a title.");
+      }
+      const commandId = stableCommandId({
+        scope,
+        requestKey: key,
+        operation: "task-board-upsert",
+      });
+      yield* threadManagement
+        .dispatch({
+          type: "thread.orchestrator-task.upsert",
+          commandId,
+          threadId: scope.thread.threadId,
+          ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
+          title: input.title,
+          ...(input.parentTaskId === undefined ? {} : { parentTaskId: input.parentTaskId }),
+          ...(input.status === undefined ? {} : { status: input.status }),
+          ...(input.subagentId === undefined ? {} : { subagentId: input.subagentId }),
+          ...(input.childThreadId === undefined ? {} : { childThreadId: input.childThreadId }),
+        })
+        .pipe(
+          Effect.mapError((error) =>
+            failure(
+              "orchestration_error",
+              `Unable to save task: ${userFacingDispatchErrorMessage(error) ?? errorMessage(error)}`,
+            ),
+          ),
+        );
+      const refreshed = yield* loadThreadRecords(scope.thread.threadId, []);
+      const tasks = refreshed.thread.orchestratorTasks ?? [];
+      const task =
+        input.taskId !== undefined
+          ? tasks.find((candidate) => candidate.id === input.taskId)
+          : input.subagentId != null
+            ? tasks.find((candidate) => candidate.subagentId === input.subagentId)
+            : tasks.at(-1);
+      return { tasks, ...(task === undefined ? {} : { task }) };
     }),
   });
 });

@@ -23,6 +23,8 @@ import {
   OrchestratorMcpScheduleTaskResult,
   OrchestratorMcpTaskCancelInput,
   OrchestratorMcpTaskCancelResult,
+  OrchestratorMcpTaskBoardInput,
+  OrchestratorMcpTaskBoardResult,
   OrchestratorMcpTaskStatusInput,
   OrchestratorMcpThreadInterruptInput,
   OrchestratorMcpThreadInterruptResult,
@@ -127,6 +129,19 @@ const TaskCancelTool = Tool.make("task_cancel", {
   .annotate(Tool.Title, "Cancel delegated task")
   .annotate(Tool.Destructive, true)
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
+
+const TaskBoardTool = Tool.make("t3_task_board", {
+  description:
+    "Manage this orchestrator thread's Tasks panel. `list`: read all tasks. `upsert`: create a parent/group task or update a task's title, parentTaskId, status, or linked subagentId. `set_status`: move a task between planned, in_progress, needs_attention, for_review, done, or cancelled.",
+  parameters: OrchestratorMcpTaskBoardInput,
+  success: OrchestratorMcpTaskBoardResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies,
+})
+  .annotate(Tool.Title, "Manage orchestrator task board")
+  .annotate(Tool.Destructive, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenUnlessOrchestrator);
 
 const WorkflowStopTool = Tool.make("t3_workflow_stop", {
   description:
@@ -367,6 +382,7 @@ export const OrchestratorToolkit = Toolkit.make(
   DelegateTaskTool,
   TaskStatusTool,
   TaskCancelTool,
+  TaskBoardTool,
   WorkflowStopTool,
   BackgroundWaitTool,
   ScheduleTaskTool,

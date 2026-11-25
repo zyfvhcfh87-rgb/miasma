@@ -2895,6 +2895,13 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             deviceInstructionsDelivered: delivered.device,
             providerInstructions: CURSOR_BACKGROUND_WAIT_INSTRUCTIONS,
             providerInstructionsDelivered: delivered.backgroundWait,
+            ...(turnInput.appThread.lineage.orchestrator === true
+              ? {
+                  orchestrator: {
+                    workerPolicy: turnInput.appThread.orchestratorWorkerPolicy,
+                  },
+                }
+              : {}),
           });
           const userText =
             interrupted === undefined

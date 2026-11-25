@@ -65,6 +65,38 @@ describe("Codex orchestration context", () => {
     // The ACP terminal fallback is ACP-only; Codex agents never need it.
     NodeAssert.ok(!orchestration.includes("acp-mcp-call"));
   });
+
+  it("emits coordinator orchestrator sections under Codex's per-entry cap", () => {
+    const manualContext = buildCodexAdditionalContext(
+      { model: "gpt-6.1-sol" },
+      { browser: true, device: true },
+      {
+        workerPolicy: {
+          mode: "manual",
+          modelSelection: {
+            instanceId: "opencode" as never,
+            model: "mistral/devstral",
+          },
+        },
+      },
+    );
+
+    for (const [key, entry] of Object.entries(manualContext)) {
+      const bytes = Buffer.byteLength(entry.value, "utf8");
+      NodeAssert.ok(
+        bytes <= CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES,
+        `${key} exceeds Codex's per-entry cap`,
+      );
+    }
+    const combined = Object.entries(manualContext)
+      .filter(([key]) => key.startsWith("t3_code_orchestration_"))
+      .map(([, entry]) => entry.value)
+      .join("\n");
+    NodeAssert.ok(combined.includes("Never code directly"));
+    NodeAssert.ok(combined.includes("Always use Miasma delegation"));
+    NodeAssert.ok(combined.includes("mistral/devstral"));
+    NodeAssert.ok(combined.includes("t3_task_board"));
+  });
 });
 
 describe("Codex device context", () => {

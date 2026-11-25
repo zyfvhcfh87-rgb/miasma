@@ -12,7 +12,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { T, useGT, Var } from "gt-react";
-import { ChevronDownIcon } from "lucide-react";
+import { BotIcon, ChevronDownIcon, ListTodoIcon } from "lucide-react";
 import {
   memo,
   useEffect,
@@ -51,11 +51,13 @@ interface ChatHeaderProps {
   activeThreadId: ThreadId;
   activeThreadTitle: string;
   activeThreadLinkOrigin?: string | null | undefined;
+  isOrchestrator?: boolean | undefined;
   isServerThread: boolean;
   activeProject: EnvironmentProject | null;
   parentThreadLink: { threadId: ThreadId; title: string } | null;
   onOpenThread: (threadId: ThreadId) => void;
   rightPanelOpen: boolean;
+  onOpenTasks?: (() => void) | undefined;
   onNewThreadInProject: () => void;
   onOpenProjectSettings?: (() => void) | undefined;
   onFindInThread?: ((threadRef: ScopedThreadRef) => void) | undefined;
@@ -76,11 +78,13 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadId,
   activeThreadTitle,
   activeThreadLinkOrigin,
+  isOrchestrator,
   isServerThread,
   activeProject,
   parentThreadLink,
   onOpenThread,
   rightPanelOpen,
+  onOpenTasks,
   onNewThreadInProject,
   onOpenProjectSettings,
   onFindInThread,
@@ -263,7 +267,12 @@ export const ChatHeader = memo(function ChatHeader({
         ariaLabel={gt("Thread breadcrumb")}
         className="flex-1 overflow-clip [overflow-clip-margin:2px]"
       >
-        {activeProject ? (
+        {activeProject &&
+        !(
+          isOrchestrator === true &&
+          activeProjectName === activeThreadTitle &&
+          !parentThreadLink
+        ) ? (
           <>
             <WorkspaceBreadcrumbItem className="shrink">
               <Tooltip>
@@ -369,7 +378,16 @@ export const ChatHeader = memo(function ChatHeader({
                   />
                 }
               >
-                <h2 className="min-w-0" dir={textDirection(activeThreadTitle)}>
+                <h2
+                  className="flex min-w-0 items-center gap-1.5"
+                  dir={textDirection(activeThreadTitle)}
+                >
+                  {isOrchestrator === true &&
+                  activeProject &&
+                  activeProjectName === activeThreadTitle &&
+                  !parentThreadLink ? (
+                    <ProjectFavicon project={activeProject} className="size-3.5 shrink-0" />
+                  ) : null}
                   <WorkspaceBreadcrumbText>{activeThreadTitle}</WorkspaceBreadcrumbText>
                 </h2>
                 <ChevronDownIcon
@@ -396,6 +414,12 @@ export const ChatHeader = memo(function ChatHeader({
               <TooltipPopup side="top">{activeThreadTitle}</TooltipPopup>
             </Tooltip>
           )}
+          {renamingTitle === null && isOrchestrator === true ? (
+            <Badge variant="secondary" size="sm">
+              <BotIcon className="size-3" />
+              <T>Orchestrator</T>
+            </Badge>
+          ) : null}
           {renamingTitle === null && activeThreadLinkOrigin ? (
             <Tooltip>
               <TooltipTrigger render={<Badge variant="info" size="sm" />}>
@@ -413,6 +437,16 @@ export const ChatHeader = memo(function ChatHeader({
           ) : null}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      {isOrchestrator === true && !rightPanelOpen && onOpenTasks ? (
+        <button
+          type="button"
+          onClick={onOpenTasks}
+          className="inline-flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <ListTodoIcon className="size-3.5" />
+          <T>Tasks</T>
+        </button>
+      ) : null}
       {isServerThread ? <GuestShareIndicator threadRef={activeThreadRef} /> : null}
     </div>
   );

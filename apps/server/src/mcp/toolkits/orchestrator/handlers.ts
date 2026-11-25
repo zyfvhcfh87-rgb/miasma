@@ -41,6 +41,13 @@ const handlers = {
       return yield* service.cancelTask(scope, input);
     }),
   ),
+  t3_task_board: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      return yield* service.taskBoard(scope, input);
+    }),
+  ),
   t3_workflow_stop: McpToolAccess.writesThreads(
     (input) => [input.threadId],
     (input) =>

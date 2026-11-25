@@ -192,8 +192,81 @@ export const OrchestrationV2AppThreadLineage = Schema.Struct({
   sideChat: Schema.optional(Schema.Boolean),
   /** An agent step of a workflow run, which the thread's `workflowRun` names. */
   workflowStep: Schema.optional(Schema.Boolean),
+  /** A continuous project orchestrator thread that coordinates delegated subagents. */
+  orchestrator: Schema.optional(Schema.Boolean),
 });
 export type OrchestrationV2AppThreadLineage = typeof OrchestrationV2AppThreadLineage.Type;
+
+export const isOrchestratorThreadLineage = (
+  lineage: Pick<OrchestrationV2AppThreadLineage, "orchestrator">,
+): boolean => lineage.orchestrator === true;
+
+export const OrchestratorWorkerPolicy = Schema.Union([
+  Schema.Struct({ mode: Schema.Literal("auto") }),
+  Schema.Struct({
+    mode: Schema.Literal("manual"),
+    modelSelection: ModelSelection,
+  }),
+]);
+export type OrchestratorWorkerPolicy = typeof OrchestratorWorkerPolicy.Type;
+
+export const OrchestrationV2OrchestratorTaskStatus = Schema.Literals([
+  "planned",
+  "in_progress",
+  "needs_attention",
+  "for_review",
+  "done",
+  "cancelled",
+]);
+export type OrchestrationV2OrchestratorTaskStatus =
+  typeof OrchestrationV2OrchestratorTaskStatus.Type;
+
+export const OrchestrationV2OrchestratorTask = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  key: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  parentTaskId: Schema.NullOr(TrimmedNonEmptyString),
+  status: OrchestrationV2OrchestratorTaskStatus,
+  subagentId: Schema.NullOr(NodeId),
+  childThreadId: Schema.NullOr(ThreadId),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  completedAt: Schema.NullOr(IsoDateTime),
+});
+export type OrchestrationV2OrchestratorTask = typeof OrchestrationV2OrchestratorTask.Type;
+
+export const OrchestrationV2OrchestratorTaskCounts = Schema.Struct({
+  inProgress: NonNegativeInt,
+  needsAttention: NonNegativeInt,
+  forReview: NonNegativeInt,
+  done: NonNegativeInt,
+});
+export type OrchestrationV2OrchestratorTaskCounts =
+  typeof OrchestrationV2OrchestratorTaskCounts.Type;
+
+export function orchestratorTaskPrefixFromTitle(title: string): string {
+  const letters = title.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  if (letters.length >= 3) return letters.slice(0, 3);
+  if (letters.length > 0) return letters.padEnd(3, "X");
+  return "TSK";
+}
+
+export function orchestratorTaskCountsFromTasks(
+  tasks: ReadonlyArray<Pick<OrchestrationV2OrchestratorTask, "status">> | undefined,
+): OrchestrationV2OrchestratorTaskCounts | undefined {
+  if (tasks === undefined || tasks.length === 0) return undefined;
+  let inProgress = 0;
+  let needsAttention = 0;
+  let forReview = 0;
+  let done = 0;
+  for (const task of tasks) {
+    if (task.status === "in_progress") inProgress += 1;
+    else if (task.status === "needs_attention") needsAttention += 1;
+    else if (task.status === "for_review") forReview += 1;
+    else if (task.status === "done") done += 1;
+  }
+  return { inProgress, needsAttention, forReview, done };
+}
 
 /**
  * Subagents and side chats live inside their parent's view, and a workflow run's agent steps
@@ -551,6 +624,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   /** Absent on threads written before tags existed; read as empty. */
   tags: Schema.optional(StoredThreadTags),
+  orchestratorWorkerPolicy: Schema.optional(OrchestratorWorkerPolicy),
+  orchestratorTasks: Schema.optional(Schema.Array(OrchestrationV2OrchestratorTask)),
   lastVisitedAt: Schema.NullOr(Schema.DateTimeUtc).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -2472,6 +2547,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   /** Absent on threads written before tags existed; read as empty. */
   tags: Schema.optional(StoredThreadTags),
+  orchestratorWorkerPolicy: Schema.optional(OrchestratorWorkerPolicy),
+  orchestratorTaskCounts: Schema.optional(OrchestrationV2OrchestratorTaskCounts),
   lastVisitedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   opens: Schema.optional(LenientThreadOpens),
   titleRegeneration: Schema.optional(
@@ -3321,6 +3398,8 @@ export const OrchestrationV2Command = Schema.Union([
     interactionMode: ProviderInteractionMode,
     branch: Schema.NullOr(GitRefName),
     worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+    orchestrator: Schema.optional(Schema.Boolean),
+    orchestratorWorkerPolicy: Schema.optional(OrchestratorWorkerPolicy),
     /** Only the server sets this; a client's thread.create never carries one. */
     linkOrigin: Schema.optional(OrchestrationV2LinkOrigin),
     /** Only the server sets this, with `linkOrigin`, for a linked environment's delegated task. */
@@ -3586,6 +3665,30 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     modelSelection: ModelSelection,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.orchestrator-worker-policy.set"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    workerPolicy: OrchestratorWorkerPolicy,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.orchestrator-task.upsert"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    taskId: Schema.optional(TrimmedNonEmptyString),
+    title: TrimmedNonEmptyString,
+    parentTaskId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    status: Schema.optional(OrchestrationV2OrchestratorTaskStatus),
+    subagentId: Schema.optional(Schema.NullOr(NodeId)),
+    childThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.orchestrator-task.set-status"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    taskId: TrimmedNonEmptyString,
+    status: OrchestrationV2OrchestratorTaskStatus,
   }),
   Schema.Struct({
     type: Schema.Literal("provider-session.detach"),

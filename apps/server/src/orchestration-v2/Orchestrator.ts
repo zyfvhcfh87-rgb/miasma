@@ -43,6 +43,8 @@ import {
   type ThreadPullRequestWatch,
   type PullRequestWatchUntil,
   type OrchestrationV2AppThread,
+  type OrchestrationV2OrchestratorTask,
+  orchestratorTaskPrefixFromTitle,
   type OrchestrationV2ContextHandoff,
   type OrchestrationV2ContextSourcePoint,
   type OrchestrationV2ContextTransfer,
@@ -681,6 +683,9 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.runtime-mode.set":
     case "thread.interaction-mode.set":
     case "thread.model-selection.set":
+    case "thread.orchestrator-worker-policy.set":
+    case "thread.orchestrator-task.upsert":
+    case "thread.orchestrator-task.set-status":
     case "provider-session.detach":
     case "message.dispatch":
     case "notification.delivery.accept":
@@ -4149,7 +4154,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         relationshipToParent: null,
         rootThreadId: command.threadId,
         ...(command.workflowRun === undefined ? {} : { workflowStep: true }),
+        ...(command.orchestrator === true ? { orchestrator: true } : {}),
       },
+      ...(command.orchestrator === true
+        ? {
+            orchestratorWorkerPolicy: command.orchestratorWorkerPolicy ?? { mode: "auto" },
+            orchestratorTasks: [],
+          }
+        : command.orchestratorWorkerPolicy === undefined
+          ? {}
+          : { orchestratorWorkerPolicy: command.orchestratorWorkerPolicy }),
       forkedFrom: null,
       createdAt: now,
       updatedAt: now,
@@ -4487,6 +4501,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.runtime-mode.set"
           | "thread.interaction-mode.set"
           | "thread.model-selection.set"
+          | "thread.orchestrator-worker-policy.set"
+          | "thread.orchestrator-task.upsert"
+          | "thread.orchestrator-task.set-status"
           | "provider.switch";
       }
     >,
@@ -5590,6 +5607,103 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             modelSelection: command.modelSelection,
             updatedAt: now,
           };
+        case "thread.orchestrator-worker-policy.set":
+          return {
+            ...thread,
+            orchestratorWorkerPolicy: command.workerPolicy,
+            updatedAt: now,
+          };
+        case "thread.orchestrator-task.upsert": {
+          const existingTasks = thread.orchestratorTasks ?? [];
+          const nowIso = DateTime.formatIso(now);
+          const existingIndex =
+            command.taskId !== undefined
+              ? existingTasks.findIndex((task) => task.id === command.taskId)
+              : command.subagentId != null
+                ? existingTasks.findIndex((task) => task.subagentId === command.subagentId)
+                : -1;
+          if (existingIndex >= 0) {
+            const current = existingTasks[existingIndex]!;
+            const nextStatus = command.status ?? current.status;
+            const nextTask: OrchestrationV2OrchestratorTask = {
+              ...current,
+              title: command.title,
+              parentTaskId:
+                command.parentTaskId === undefined ? current.parentTaskId : command.parentTaskId,
+              status: nextStatus,
+              subagentId:
+                command.subagentId === undefined ? current.subagentId : command.subagentId,
+              childThreadId:
+                command.childThreadId === undefined ? current.childThreadId : command.childThreadId,
+              updatedAt: nowIso,
+              completedAt:
+                nextStatus === "done" || nextStatus === "cancelled"
+                  ? (current.completedAt ?? nowIso)
+                  : null,
+            };
+            return {
+              ...thread,
+              orchestratorTasks: existingTasks.map((task, idx) =>
+                idx === existingIndex ? nextTask : task,
+              ),
+              updatedAt: now,
+            };
+          }
+          const prefix = orchestratorTaskPrefixFromTitle(thread.title);
+          let maxNumber = 0;
+          for (const task of existingTasks) {
+            const match = /-(\d+)$/.exec(task.key);
+            if (match?.[1]) {
+              const parsed = Number.parseInt(match[1], 10);
+              if (Number.isFinite(parsed) && parsed > maxNumber) maxNumber = parsed;
+            }
+          }
+          const nextKey = `${prefix}-${maxNumber + 1}`;
+          const nextStatus = command.status ?? "planned";
+          const created: OrchestrationV2OrchestratorTask = {
+            id: command.taskId ?? `task:${nextKey.toLowerCase()}:${command.commandId}`,
+            key: nextKey,
+            title: command.title,
+            parentTaskId: command.parentTaskId ?? null,
+            status: nextStatus,
+            subagentId: command.subagentId ?? null,
+            childThreadId: command.childThreadId ?? null,
+            createdAt: nowIso,
+            updatedAt: nowIso,
+            completedAt: nextStatus === "done" || nextStatus === "cancelled" ? nowIso : null,
+          };
+          return {
+            ...thread,
+            orchestratorTasks: [...existingTasks, created],
+            updatedAt: now,
+          };
+        }
+        case "thread.orchestrator-task.set-status": {
+          const existingTasks = thread.orchestratorTasks ?? [];
+          const nowIso = DateTime.formatIso(now);
+          let found = false;
+          const nextTasks = existingTasks.map((task) => {
+            if (task.id !== command.taskId) return task;
+            found = true;
+            return {
+              ...task,
+              status: command.status,
+              updatedAt: nowIso,
+              completedAt:
+                command.status === "done" || command.status === "cancelled"
+                  ? (task.completedAt ?? nowIso)
+                  : null,
+            };
+          });
+          if (!found) {
+            return thread;
+          }
+          return {
+            ...thread,
+            orchestratorTasks: nextTasks,
+            updatedAt: now,
+          };
+        }
       }
     })();
     if (command.type === "thread.pull-request-watch.checks-reopen") {
@@ -5657,6 +5771,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return "thread.marked-unread" as const;
         case "thread.metadata.update":
         case "thread.title.regeneration.complete":
+        case "thread.orchestrator-worker-policy.set":
+        case "thread.orchestrator-task.upsert":
+        case "thread.orchestrator-task.set-status":
           return "thread.metadata-updated" as const;
         case "thread.pull-request.link":
         case "thread.pull-request.unlink":
@@ -10792,6 +10909,39 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       occurredAt: now,
       payload: plan.task,
     });
+    const existingOrchestratorTasks = parentProjection.thread.orchestratorTasks;
+    if (existingOrchestratorTasks !== undefined && existingOrchestratorTasks.length > 0) {
+      const nextTaskStatus =
+        command.status === "completed"
+          ? ("for_review" as const)
+          : command.status === "failed"
+            ? ("needs_attention" as const)
+            : ("cancelled" as const);
+      const nowIso = DateTime.formatIso(now);
+      let tasksChanged = false;
+      const updatedOrchestratorTasks = existingOrchestratorTasks.map((entry) => {
+        if (entry.subagentId !== task.id) return entry;
+        if (entry.status !== "in_progress" && entry.status !== "planned") return entry;
+        tasksChanged = true;
+        return {
+          ...entry,
+          status: nextTaskStatus,
+          updatedAt: nowIso,
+        };
+      });
+      if (tasksChanged) {
+        yield* emitEvent({
+          type: "thread.metadata-updated",
+          threadId: command.parentThreadId,
+          occurredAt: now,
+          payload: {
+            ...parentProjection.thread,
+            orchestratorTasks: updatedOrchestratorTasks,
+            updatedAt: now,
+          },
+        });
+      }
+    }
     for (const event of delegatedCompletionPlanEvents(
       command.parentThreadId,
       plan,
@@ -16192,6 +16342,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.runtime-mode.set":
       case "thread.interaction-mode.set":
       case "thread.model-selection.set":
+      case "thread.orchestrator-worker-policy.set":
+      case "thread.orchestrator-task.upsert":
+      case "thread.orchestrator-task.set-status":
       case "provider.switch":
         yield* dispatchThreadMutation(command, events, effects);
         break;
