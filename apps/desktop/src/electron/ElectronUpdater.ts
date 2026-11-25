@@ -61,7 +61,7 @@ const SWAP_MAC_APP_AND_RELAUNCH = [
   "  exit 1",
   "fi",
   'rm -rf "$temp_dir"',
-  'xattr -dr com.apple.quarantine "$target" 2>/dev/null || true',
+  'xattr -cr "$target" 2>/dev/null || true',
   'if [ "$relaunch" = "1" ]; then',
   '  open -n "$target"',
   "fi",

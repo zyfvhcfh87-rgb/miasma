@@ -69,4 +69,17 @@ module.exports = async ({ appOutDir, electronPlatformName, arch, packager }) => 
   if (result.status !== 0)
     throw new Error(`Server compile cache generation failed: ${result.error || result.stderr}`);
   console.log("[server-compile-cache] Prepared server bytecode with packaged Electron");
+
+  // Unsigned macOS arm64 builds leave Electron's prebuilt signature invalidated after resource edits;
+  // ad-hoc re-signing seals the final bundle so macOS does not report it as damaged.
+  if (electronPlatformName === "darwin" && process.env.CSC_IDENTITY_AUTO_DISCOVERY === "false") {
+    const appBundlePath = path.join(appOutDir, `${product}.app`);
+    const signResult = spawnSync("codesign", ["--force", "--deep", "--sign", "-", appBundlePath], {
+      encoding: "utf8",
+    });
+    if (signResult.status !== 0) {
+      throw new Error(`Ad-hoc codesign failed: ${signResult.error || signResult.stderr}`);
+    }
+    console.log(`[codesign] Ad-hoc signed ${product}.app`);
+  }
 };

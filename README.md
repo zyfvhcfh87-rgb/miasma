@@ -27,6 +27,14 @@ Miasma runs the coding agents installed on your machine and brings them into one
 
 Download the latest `.dmg` (macOS Apple Silicon) or installer from [Releases](https://github.com/zyfvhcfh87-rgb/miasma/releases), drag **Miasma** into `/Applications`, and launch.
 
+> **macOS first launch (unsigned build):** Because Miasma is not notarized with a paid Apple Developer ID, browsers attach a quarantine flag to downloaded `.dmg` files. Run this once after dragging to `/Applications`:
+>
+> ```bash
+> xattr -cr /Applications/Miasma.app
+> ```
+>
+> Future in-app updates from Miasma clear this automatically.
+
 ## Building from source
 
 ```bash
