@@ -135,6 +135,46 @@ describe("applyOrchestrationV2ProjectionEvent", () => {
     expect(next?.thread.pullRequests?.[0]).toBe(links[0]);
   });
 
+  it("applies targeted thread.orchestrator-tasks-updated events without clobbering activeProviderThreadId", () => {
+    const providerThreadId = ProviderThreadId.make("provider-thread-concurrent");
+    const subagentId = NodeId.make("subagent-sync-1");
+    const task = {
+      id: "task-1",
+      key: "STO-1",
+      title: "Implement feature",
+      parentTaskId: null,
+      status: "in_progress" as const,
+      subagentId,
+      childThreadId: null,
+      createdAt: "2026-08-29T00:00:00.000Z",
+      updatedAt: "2026-08-29T00:00:00.000Z",
+      completedAt: null,
+    };
+    const projection = {
+      ...emptyProjection,
+      thread: {
+        ...emptyProjection.thread,
+        activeProviderThreadId: providerThreadId,
+        orchestratorTasks: [task],
+      },
+    };
+    const syncedAt = DateTime.makeUnsafe("2026-08-29T00:05:00.000Z");
+    const next = applyOrchestrationV2ProjectionEvent(projection, {
+      id: "orch-task-sync" as OrchestrationV2DomainEvent["id"],
+      type: "thread.orchestrator-tasks-updated",
+      threadId,
+      occurredAt: syncedAt,
+      payload: {
+        kind: "sync_subagent",
+        subagentId,
+        status: "for_review",
+      },
+    });
+    expect(next?.thread.activeProviderThreadId).toBe(providerThreadId);
+    expect(next?.thread.orchestratorTasks?.[0]?.status).toBe("for_review");
+    expect(next?.thread.orchestratorTasks?.[0]?.updatedAt).toBe(DateTime.formatIso(syncedAt));
+  });
+
   it("keeps live token usage when the terminal provider turn omits it", () => {
     const providerTurnId = ProviderTurnId.make("provider-turn-reducer");
     const running = {

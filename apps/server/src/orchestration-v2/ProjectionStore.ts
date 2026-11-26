@@ -1,5 +1,10 @@
 import type { ProjectThreadAwarenessV2Input } from "@t3tools/shared/agentAwareness";
-import { applyOrchestrationV2ThreadVisit, pendingGuestMessageCount } from "@t3tools/contracts";
+import {
+  applyOrchestrationV2ThreadVisit,
+  applyOrchestratorTasksUpdate,
+  orchestratorTaskCountsFromTasks,
+  pendingGuestMessageCount,
+} from "@t3tools/contracts";
 import { applyThreadPullRequestLinkUpdate } from "../sourceControl/threadPullRequests.ts";
 import { projectTurnItemForWire } from "./WireProjection.ts";
 import * as Stream from "effect/Stream";
@@ -1052,6 +1057,14 @@ export function applyToProjection(
         ...projection,
         thread: applyThreadPullRequestLinkUpdate(projection.thread, event.payload),
       };
+    case "thread.orchestrator-tasks-updated": {
+      const updated = applyOrchestratorTasksUpdate(
+        projection.thread,
+        event.payload,
+        event.occurredAt,
+      );
+      return updated === projection.thread ? projection : { ...base, thread: updated };
+    }
     case "thread.created":
     case "thread.archived":
     case "thread.unarchived":
@@ -1337,6 +1350,7 @@ const shellIndexLineage = (row: {
   readonly parent_thread_id: string | null;
   readonly root_thread_id: string;
   readonly side_chat: number | null;
+  readonly orchestrator?: number | null;
 }): OrchestrationV2ThreadShell["lineage"] => ({
   parentThreadId: row.parent_thread_id === null ? null : ThreadId.make(row.parent_thread_id),
   relationshipToParent:
@@ -1345,6 +1359,7 @@ const shellIndexLineage = (row: {
       : null,
   rootThreadId: ThreadId.make(row.root_thread_id),
   ...(row.side_chat === null ? {} : { sideChat: row.side_chat === 1 }),
+  ...(row.orchestrator === 1 ? { orchestrator: true } : {}),
 });
 
 const encodeIdList = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
@@ -2020,6 +2035,16 @@ export function threadShellFromProjection(
     autoSettleDisabledAt: projection.thread.autoSettleDisabledAt ?? null,
     pinOrderKey: projection.thread.pinOrderKey ?? null,
     ...(projection.thread.tags?.length ? { tags: projection.thread.tags } : {}),
+    ...(projection.thread.orchestratorWorkerPolicy === undefined
+      ? {}
+      : { orchestratorWorkerPolicy: projection.thread.orchestratorWorkerPolicy }),
+    ...(orchestratorTaskCountsFromTasks(projection.thread.orchestratorTasks) === undefined
+      ? {}
+      : {
+          orchestratorTaskCounts: orchestratorTaskCountsFromTasks(
+            projection.thread.orchestratorTasks,
+          ),
+        }),
     lastVisitedAt: projection.thread.lastVisitedAt,
     opens: projection.thread.opens ?? null,
     titleRegeneration: projection.thread.titleRegeneration ?? null,
@@ -2321,6 +2346,16 @@ function shellFromState(input: {
     autoSettleDisabledAt: input.state.thread.autoSettleDisabledAt ?? null,
     pinOrderKey: input.state.thread.pinOrderKey ?? null,
     ...(input.state.thread.tags?.length ? { tags: input.state.thread.tags } : {}),
+    ...(input.state.thread.orchestratorWorkerPolicy === undefined
+      ? {}
+      : { orchestratorWorkerPolicy: input.state.thread.orchestratorWorkerPolicy }),
+    ...(orchestratorTaskCountsFromTasks(input.state.thread.orchestratorTasks) === undefined
+      ? {}
+      : {
+          orchestratorTaskCounts: orchestratorTaskCountsFromTasks(
+            input.state.thread.orchestratorTasks,
+          ),
+        }),
     lastVisitedAt: input.state.thread.lastVisitedAt,
     opens: input.state.thread.opens ?? null,
     titleRegeneration: input.state.thread.titleRegeneration ?? null,
@@ -2501,6 +2536,22 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 type: "thread.pull-request-synced",
                 payload: applyThreadPullRequestLinkUpdate(thread, event.payload),
               });
+              break;
+            }
+            case "thread.orchestrator-tasks-updated": {
+              const thread = yield* getThread(event.threadId);
+              const updatedThread = applyOrchestratorTasksUpdate(
+                thread,
+                event.payload,
+                event.occurredAt,
+              );
+              if (updatedThread !== thread) {
+                yield* apply({
+                  ...event,
+                  type: "thread.metadata-updated",
+                  payload: updatedThread,
+                });
+              }
               break;
             }
             case "thread.visit-recorded": {
@@ -3386,6 +3437,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             event.type !== "thread.pull-request-synced" &&
             event.type !== "thread.issue-synced" &&
             event.type !== "thread.pull-request-link-updated" &&
+            event.type !== "thread.orchestrator-tasks-updated" &&
             event.type !== "thread.runtime-mode-updated" &&
             event.type !== "thread.interaction-mode-updated" &&
             event.type !== "thread.model-selection-updated" &&
@@ -8952,8 +9004,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 const status = shellStatusFromStoredRunStatus(row.latest_run_status);
                 const latestRunId =
                   row.latest_run_id === null ? null : RunId.make(row.latest_run_id);
+                const { orchestratorTasks: _orchestratorTasks, ...threadForShell } = thread;
+                const orchestratorTaskCounts = orchestratorTaskCountsFromTasks(
+                  thread.orchestratorTasks,
+                );
                 return {
-                  ...thread,
+                  ...threadForShell,
+                  ...(orchestratorTaskCounts === undefined ? {} : { orchestratorTaskCounts }),
                   pinnedAt: thread.pinnedAt ?? null,
 
                   autoSettleDisabledAt: thread.autoSettleDisabledAt ?? null,
@@ -9657,6 +9714,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         readonly root_thread_id: string;
         readonly side_chat: number | null;
         readonly workflow_step: number | null;
+        readonly orchestrator: number | null;
         readonly delegated_from_environment_id: string | null;
         readonly delegated_from_thread_id: string | null;
         readonly delegated_from_title: string | null;
@@ -9674,6 +9732,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           json_extract(t.payload_json, '$.lineage.rootThreadId') AS root_thread_id,
           json_extract(t.payload_json, '$.lineage.sideChat') AS side_chat,
           json_extract(t.payload_json, '$.lineage.workflowStep') AS workflow_step,
+          json_extract(t.payload_json, '$.lineage.orchestrator') AS orchestrator,
           json_extract(t.payload_json, '$.delegatedFrom.environmentId') AS delegated_from_environment_id,
           json_extract(t.payload_json, '$.delegatedFrom.threadId') AS delegated_from_thread_id,
           json_extract(t.payload_json, '$.delegatedFrom.title') AS delegated_from_title,

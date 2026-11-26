@@ -232,8 +232,14 @@ const boxProjects: ReadonlyArray<Project> = [
   },
 ];
 
-const serveBox = (thread: BoxThread) => {
-  return servePeer(box, boxToolkitLayer(thread));
+const serveBox = (
+  thread: BoxThread,
+  options?: {
+    readonly providers?: ReadonlyArray<ServerProvider>;
+    readonly settings?: Parameters<typeof ServerSettings.layerTest>[0];
+  },
+) => {
+  return servePeer(box, boxToolkitLayer(thread, options));
 };
 
 const boxRunId = RunId.make("run:box");
@@ -241,7 +247,14 @@ const boxLaterRunId = RunId.make("run:box-later");
 const boxQueuedRunId = RunId.make("run:box-queued");
 const continuationOf = (runId: RunId) => RunId.make(`${runId}:restarted`);
 
-const boxToolkitLayer = (thread: BoxThread) => {
+const boxToolkitLayer = (
+  thread: BoxThread,
+  options?: {
+    readonly providers?: ReadonlyArray<ServerProvider>;
+    readonly settings?: Parameters<typeof ServerSettings.layerTest>[0];
+  },
+) => {
+  const boxProviders = options?.providers ?? [boxClaude];
   const runId = boxRunId;
   const interrupts = new Set<string>();
   const shellOf = (threadId: ThreadId) =>
@@ -593,12 +606,12 @@ const boxToolkitLayer = (thread: BoxThread) => {
     ),
     Layer.provide(
       Layer.mock(ProviderRegistry.ProviderRegistry)({
-        getProviders: Effect.succeed([boxClaude]),
+        getProviders: Effect.succeed(boxProviders),
       }),
     ),
     Layer.provide(
       Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
-        list: () => Effect.succeed([boxClaude.instanceId]),
+        list: () => Effect.succeed(boxProviders.map((provider) => provider.instanceId)),
       }),
     ),
     Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
@@ -616,7 +629,21 @@ const boxToolkitLayer = (thread: BoxThread) => {
     ),
     Layer.provide(Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({})),
     Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
-    Layer.provide(ServerSettings.layerTest()),
+    Layer.provide(
+      ServerSettings.layerTest({
+        providerInstances: Object.fromEntries(
+          boxProviders.map((provider) => [
+            provider.instanceId,
+            {
+              driver: provider.driver,
+              enabled: provider.enabled,
+              config: {},
+            },
+          ]),
+        ),
+        ...options?.settings,
+      }),
+    ),
     Layer.provide(NodeServices.layer),
   );
 };
@@ -742,7 +769,13 @@ const makeLaptop = (
       Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
       Layer.provide(NodeCrypto.layer),
       Layer.provideMerge(layerThreads),
-      Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
+      Layer.provide(
+        Layer.mock(ProviderRegistry.ProviderRegistry)({
+          getProviders: Effect.succeed([
+            { ...boxClaude, instanceId: ProviderInstanceId.make("claude-work") },
+          ]),
+        }),
+      ),
       Layer.provide(Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({})),
       Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
       Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
@@ -792,6 +825,7 @@ const parentScope: McpInvocationContext.McpInvocationScope = {
 const seedParent = (
   laptopEnv: Effect.Success<ReturnType<typeof makeLaptop>>,
   parentModelSelection: ModelSelection = modelSelection,
+  options?: { readonly orchestrator?: boolean },
 ) =>
   Effect.gen(function* () {
     const now = yield* DateTime.now;
@@ -809,6 +843,7 @@ const seedParent = (
       interactionMode: "default",
       branch: null,
       worktreePath: null,
+      ...(options?.orchestrator === true ? { orchestrator: true } : {}),
     });
     yield* laptopEnv.sink.write({
       commandId: CommandId.make("command:seed:laptop-parent"),
@@ -1331,6 +1366,192 @@ it.effect("a task naming another driver there never runs its model on the parent
       );
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect(
+  "a manual worker policy resolves the peer's provider by pinned model, ignores conflicting driverKind/options, and fails if unavailable",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const thread = yield* makeBoxThread;
+        const b = yield* serveBox(thread);
+        const offers = yield* SubscriptionRef.make<
+          ReadonlyArray<ProviderContinuationRequests.ProviderContinuationRequest>
+        >([]);
+        const database = yield* SqlitePersistence.layerMemory.pipe(Layer.build);
+        const a = yield* makeLaptop(database, offers);
+        yield* linkTo(a.links, b, "full-access");
+        yield* seedParent(a, modelSelection, { orchestrator: true });
+
+        // Pin coordinator manual worker to a local instanceId ("claude-work") that does not exist
+        // on the box (which offers "claude-box") and with no options.
+        yield* a.orchestrator.dispatch({
+          type: "thread.orchestrator-worker-policy.set",
+          commandId: CommandId.make("command:manual-worker:claude-work"),
+          threadId: parentThreadId,
+          workerPolicy: {
+            mode: "manual",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("claude-work"),
+              model: "claude-sonnet-4-6",
+            },
+          },
+        });
+
+        const result = yield* a.call("delegate_task", {
+          task: "Run tests on the box under manual worker policy.",
+          target: {
+            environmentId: box.environmentId,
+            driverKind: "codex",
+            options: [{ id: "reasoningEffort", value: "low" }],
+          },
+          clientRequestId: "manual-policy-resolved",
+        });
+        expect(result.isError, JSON.stringify(result.content)).toBe(false);
+        expect((yield* Ref.get(thread.launchedWith))?.modelSelection).toEqual({
+          instanceId: boxClaude.instanceId,
+          model: "claude-sonnet-4-6",
+        });
+
+        // When the peer does not offer the pinned manual model, refuse cleanly without substituting.
+        yield* a.orchestrator.dispatch({
+          type: "thread.orchestrator-worker-policy.set",
+          commandId: CommandId.make("command:manual-worker:missing"),
+          threadId: parentThreadId,
+          workerPolicy: {
+            mode: "manual",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("claude-work"),
+              model: "claude-nonexistent-9",
+            },
+          },
+        });
+        const unavailable = yield* a.call("delegate_task", {
+          task: "Run tests with an unavailable pinned model.",
+          target: { environmentId: box.environmentId },
+          clientRequestId: "manual-policy-unavailable",
+        });
+        expect(unavailable.isError).toBe(true);
+      }),
+    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect(
+  "a manual worker policy finds a pinned model omitted from the peer's default shortlist under a different instance ID",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const boxOpenCode: ServerProvider = {
+          instanceId: ProviderInstanceId.make("opencode-box"),
+          driver: ProviderDriverKind.make("opencode"),
+          enabled: true,
+          installed: true,
+          version: "test",
+          status: "ready",
+          auth: { status: "authenticated" },
+          checkedAt: "2026-09-13T00:00:00.000Z",
+          models: Array.from({ length: 12 }, (_, index) => ({
+            slug: `openrouter/model-${index + 1}`,
+            name: `Model ${index + 1}`,
+            isCustom: false,
+            capabilities: null,
+          })),
+          slashCommands: [],
+          skills: [],
+        };
+        const thread = yield* makeBoxThread;
+        const b = yield* serveBox(thread, { providers: [boxOpenCode] });
+        const offers = yield* SubscriptionRef.make<
+          ReadonlyArray<ProviderContinuationRequests.ProviderContinuationRequest>
+        >([]);
+        const database = yield* SqlitePersistence.layerMemory.pipe(Layer.build);
+        const a = yield* makeLaptop(database, offers);
+        yield* linkTo(a.links, b, "full-access");
+        yield* seedParent(a, modelSelection, { orchestrator: true });
+
+        yield* a.orchestrator.dispatch({
+          type: "thread.orchestrator-worker-policy.set",
+          commandId: CommandId.make("command:manual-worker:opencode-shortlist"),
+          threadId: parentThreadId,
+          workerPolicy: {
+            mode: "manual",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("opencode-work"),
+              model: "openrouter/model-10",
+            },
+          },
+        });
+
+        const result = yield* a.call("delegate_task", {
+          task: "Run tests with a model past the default shortlist cap.",
+          target: { environmentId: box.environmentId },
+          clientRequestId: "manual-policy-shortlist-overflow",
+        });
+        expect(result.isError, JSON.stringify(result.content)).toBe(false);
+        expect((yield* Ref.get(thread.launchedWith))?.modelSelection).toEqual({
+          instanceId: boxOpenCode.instanceId,
+          model: "openrouter/model-10",
+        });
+      }),
+    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect(
+  "a manual worker policy skips a peer instance disabled for the destination project and uses an enabled one",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const disabledInstance = ProviderInstanceId.make("claude-work");
+        const enabledInstance = ProviderInstanceId.make("claude-backup");
+        const thread = yield* makeBoxThread;
+        const b = yield* serveBox(thread, {
+          providers: [
+            { ...boxClaude, instanceId: disabledInstance },
+            { ...boxClaude, instanceId: enabledInstance },
+          ],
+          settings: {
+            projectSettingsOverrides: {
+              [boxProject]: {
+                providerInstances: {
+                  [disabledInstance]: { enabled: false },
+                },
+              },
+            },
+          },
+        });
+        const offers = yield* SubscriptionRef.make<
+          ReadonlyArray<ProviderContinuationRequests.ProviderContinuationRequest>
+        >([]);
+        const database = yield* SqlitePersistence.layerMemory.pipe(Layer.build);
+        const a = yield* makeLaptop(database, offers);
+        yield* linkTo(a.links, b, "full-access");
+        yield* seedParent(a, modelSelection, { orchestrator: true });
+
+        yield* a.orchestrator.dispatch({
+          type: "thread.orchestrator-worker-policy.set",
+          commandId: CommandId.make("command:manual-worker:project-disabled"),
+          threadId: parentThreadId,
+          workerPolicy: {
+            mode: "manual",
+            modelSelection: {
+              instanceId: disabledInstance,
+              model: "claude-sonnet-4-6",
+            },
+          },
+        });
+
+        const result = yield* a.call("delegate_task", {
+          task: "Run tests on the enabled peer instance.",
+          target: { environmentId: box.environmentId },
+          clientRequestId: "manual-policy-project-disabled",
+        });
+        expect(result.isError, JSON.stringify(result.content)).toBe(false);
+        expect((yield* Ref.get(thread.launchedWith))?.modelSelection).toEqual({
+          instanceId: enabledInstance,
+          model: "claude-sonnet-4-6",
+        });
+      }),
+    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
 it.effect("refuses worktree isolation for a task there before launching anything", () =>

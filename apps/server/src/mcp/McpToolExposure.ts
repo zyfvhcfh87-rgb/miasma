@@ -11,6 +11,15 @@ const DIRECT_TOOLS: ReadonlySet<string> = new Set([
   TOOL_SEARCH,
 ]);
 
+const ORCHESTRATOR_DIRECT_TOOLS: ReadonlySet<string> = new Set([
+  ...DIRECT_TOOLS,
+  "task_cancel",
+  "t3_thread_read",
+  "t3_thread_send",
+  "t3_pending_request",
+  "t3_task_board",
+]);
+
 const MAX_RESULTS = 10;
 // Sessions that ended are never reported here, so keep only the newest.
 const MAX_SESSIONS = 256;
@@ -28,7 +37,11 @@ export class McpToolExposure extends Context.Service<
       providerSessionId: string,
       query: string,
     ) => Effect.Effect<ReadonlyArray<ListedTool>>;
-    readonly isListed: (providerSessionId: string, tool: string) => boolean;
+    readonly isListed: (
+      providerSessionId: string,
+      tool: string,
+      options?: { readonly orchestrator?: boolean },
+    ) => boolean;
   }
 >()("t3/mcp/McpToolExposure") {}
 
@@ -81,7 +94,8 @@ export const make = (
       }
       return found;
     }),
-    isListed: (providerSessionId, tool) =>
-      DIRECT_TOOLS.has(tool) || loaded.get(providerSessionId)?.has(tool) === true,
+    isListed: (providerSessionId, tool, options) =>
+      (options?.orchestrator === true ? ORCHESTRATOR_DIRECT_TOOLS : DIRECT_TOOLS).has(tool) ||
+      loaded.get(providerSessionId)?.has(tool) === true,
   });
 };

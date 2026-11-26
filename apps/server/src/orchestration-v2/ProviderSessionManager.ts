@@ -639,10 +639,19 @@ export const layerWithOptions = (
                 if (Option.getOrElse(backgroundWait, () => false)) {
                   capabilities.add("background-wait");
                 }
-                const subagent = yield* projectionStore.getThread(threadId).pipe(
-                  Effect.map((thread) => thread.lineage.relationshipToParent === "subagent"),
-                  Effect.orElseSucceed(() => false),
+                const threadFlags = yield* projectionStore.getThread(threadId).pipe(
+                  Effect.map((thread) => ({
+                    subagent: thread.lineage.relationshipToParent === "subagent",
+                    orchestrator: thread.lineage.orchestrator === true,
+                    orchestratorWorkerPolicy: thread.orchestratorWorkerPolicy,
+                  })),
+                  Effect.orElseSucceed(() => ({
+                    subagent: false,
+                    orchestrator: false,
+                    orchestratorWorkerPolicy: undefined,
+                  })),
                 );
+                const { subagent, orchestrator, orchestratorWorkerPolicy } = threadFlags;
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
                   // Reserve before async validation so release cannot revoke between validation and reservation.
@@ -668,8 +677,15 @@ export const layerWithOptions = (
                     (Option.isNone(backgroundWait) ||
                       resolved.capabilities.has("background-wait") === backgroundWait.value) &&
                     // A credential issued while the lineage read failed is replaced once it works.
-                    (resolved.thread.subagent === true) === subagent
+                    (resolved.thread.subagent === true) === subagent &&
+                    (resolved.thread.orchestrator === true) === orchestrator
                   ) {
+                    if (existing.orchestratorWorkerPolicy !== orchestratorWorkerPolicy) {
+                      yield* mcpSessions.set({
+                        ...existing,
+                        orchestratorWorkerPolicy,
+                      });
+                    }
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
                   }
                   dropMcpCredentialReservation(threadId, existing.providerSessionId);
@@ -681,9 +697,11 @@ export const layerWithOptions = (
                   browserToolsAvailable,
                   capabilities,
                   subagent,
+                  orchestrator,
                 });
                 yield* mcpSessions.set({
                   ...credential.config,
+                  orchestratorWorkerPolicy,
                   hasPendingWake: projectionStore
                     .getThreadRecords(threadId, ["runs", "subagents"])
                     .pipe(

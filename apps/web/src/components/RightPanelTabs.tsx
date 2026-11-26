@@ -50,6 +50,7 @@ import {
   FileDiff,
   Files,
   Globe2,
+  ListTodo,
   MessagesSquare,
   Plus,
   TerminalSquare,
@@ -158,6 +159,7 @@ export interface RightPanelTabsProps {
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
   onAddDevice: () => void;
+  onAddTasks?: (() => void) | undefined;
   /** Absent where side chats are not offered. */
   onAddSideChat?: (() => void) | undefined;
   browserAvailable: boolean;
@@ -167,6 +169,7 @@ export interface RightPanelTabsProps {
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
   deviceAvailable: boolean;
+  tasksAvailable?: boolean;
   sideChatAvailable?: boolean;
   /** Overrides the default reason while side chats are available but cannot start. */
   sideChatDisabledReason?: string | null;
@@ -344,6 +347,7 @@ function RightPanelEmptyState(props: {
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
   onAddDevice: () => void;
+  onAddTasks?: (() => void) | undefined;
   /** Absent where side chats are not offered. */
   onAddSideChat?: (() => void) | undefined;
   browserAvailable: boolean;
@@ -353,6 +357,7 @@ function RightPanelEmptyState(props: {
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
   deviceAvailable: boolean;
+  tasksAvailable?: boolean;
   sideChatAvailable: boolean;
   sideChatDisabledReason: string | null;
 }) {
@@ -418,6 +423,19 @@ function RightPanelEmptyState(props: {
       disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.device),
       onClick: props.onAddDevice,
     },
+    ...(props.onAddTasks && props.tasksAvailable
+      ? [
+          {
+            label: msg("Tasks"),
+            description: msg("Track sub-agent work and review status."),
+            icon: ListTodo,
+            shortcut: "K",
+            available: true,
+            disabledReason: "",
+            onClick: props.onAddTasks,
+          },
+        ]
+      : []),
     ...(props.onAddSideChat
       ? [
           {
@@ -618,6 +636,8 @@ function surfaceTitle(
       return `#${surface.number}`;
     case "pull-requests":
       return resolve(msg("Linked items"));
+    case "tasks":
+      return resolve(msg("Tasks"));
     case "issue":
       // A git host numbers its issues; a tracker with keys of its own, such as Linear, names them.
       return /^\d+$/.test(surface.key) ? `#${surface.key}` : surface.key;
@@ -719,6 +739,8 @@ function SurfaceIcon({
       );
     case "pull-requests":
       return <PullRequestGlyph.link className="size-3 shrink-0" />;
+    case "tasks":
+      return <ListTodo className="size-3 shrink-0" />;
     case "issue":
       return <IssueSurfaceIcon surface={surface} environmentId={environmentId} />;
     case "thread":
@@ -1260,6 +1282,18 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       disabledReason: messages(SURFACE_DISABLED_REASONS.device),
       onClick: props.onAddDevice,
     },
+    ...(props.onAddTasks && props.tasksAvailable
+      ? [
+          {
+            label: msg("Tasks"),
+            icon: ListTodo,
+            shortcut: "K",
+            available: true,
+            disabledReason: "",
+            onClick: props.onAddTasks,
+          },
+        ]
+      : []),
     ...(props.onAddSideChat
       ? [
           {
@@ -1697,6 +1731,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddPullRequest={props.onAddPullRequest}
             onAddPullRequests={props.onAddPullRequests}
             onAddDevice={props.onAddDevice}
+            onAddTasks={props.onAddTasks}
             onAddSideChat={props.onAddSideChat}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
@@ -1705,6 +1740,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             pullRequestAvailable={props.pullRequestAvailable}
             pullRequestsAvailable={props.pullRequestsAvailable}
             deviceAvailable={props.deviceAvailable}
+            tasksAvailable={props.tasksAvailable === true}
             sideChatAvailable={props.sideChatAvailable === true}
             sideChatDisabledReason={props.sideChatDisabledReason ?? null}
           />

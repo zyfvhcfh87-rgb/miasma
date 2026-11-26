@@ -264,6 +264,145 @@ describe("OrchestratorMcpService", () => {
     }),
   );
 
+  it.effect(
+    "delegateTask forwards a manual worker policy cleanly without leaking caller driverKind or options",
+    () =>
+      Effect.gen(function* () {
+        const parentThreadId = ThreadId.make("thread:mcp-remote-manual-parent");
+        const remoteChildThreadId = ThreadId.make("thread:mcp-remote-manual-child");
+        const taskId = NodeId.make("node:mcp-remote-manual-task");
+        const projectId = ProjectId.make("project:mcp-remote-manual");
+        const codexInstanceId = ProviderInstanceId.make("codex");
+        const localClaudeInstanceId = ProviderInstanceId.make("claude-work");
+        const peerClaudeInstanceId = ProviderInstanceId.make("claude-box");
+        const remoteEnvironmentId = EnvironmentId.make("environment:mcp-remote-manual-box");
+        const forwardedCalls = yield* Ref.make<ReadonlyArray<unknown>>([]);
+        let workerPolicy: unknown = {
+          mode: "manual",
+          modelSelection: {
+            instanceId: localClaudeInstanceId,
+            model: "claude-sonnet-4-6",
+            options: [{ id: "reasoningEffort", value: "high" }],
+          },
+        };
+        const parentProjection = () =>
+          ({
+            thread: {
+              id: parentThreadId,
+              projectId,
+              title: "Orchestrator",
+              createdBy: "user",
+              creationSource: "web",
+              modelSelection: { instanceId: codexInstanceId, model: "gpt-5.4" },
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              lineage: { orchestrator: true },
+              orchestratorWorkerPolicy: workerPolicy,
+            },
+            runs: [],
+            subagents: [
+              {
+                id: taskId,
+                threadId: parentThreadId,
+                origin: "app_owned",
+                childThreadId: null,
+                remoteChild: { environmentId: remoteEnvironmentId, threadId: remoteChildThreadId },
+                status: "running",
+                result: null,
+              },
+            ],
+          }) as unknown as OrchestrationV2ThreadProjection;
+        const layerDependencies = Layer.mergeAll(
+          NodeServices.layer,
+          NodeCrypto.layer,
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            getThreadRecords: () => Effect.sync(parentProjection),
+          }),
+          ServerSettings.layerTest(),
+          Layer.mock(ProviderRegistry.ProviderRegistry)({
+            getProviders: Effect.succeed([
+              {
+                instanceId: localClaudeInstanceId,
+                driver: ProviderDriverKind.make("claudeAgent"),
+                name: "Claude Work",
+                enabled: true,
+                installed: true,
+                auth: { status: "authenticated" },
+                models: [],
+              } as never,
+            ]),
+          }),
+          Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
+            list: () => Effect.succeed([]),
+          }),
+          Layer.mock(ProjectService.ProjectService)({ getById: () => Effect.succeedNone }),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+          Layer.mock(RemoteDelegation.RemoteDelegation)({
+            delegate: (_scope, input) =>
+              Ref.update(forwardedCalls, (calls) => [
+                ...calls,
+                { target: input.target, manualWorker: input.manualWorker },
+              ]).pipe(Effect.as({ taskId })),
+            runStatus: () => Effect.succeed(null),
+          }),
+          Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+        );
+        const scope: McpInvocationScope = {
+          environmentId: EnvironmentId.make("environment:mcp-remote-manual"),
+          requestNamespace: "provider-session:mcp-remote-manual",
+          thread: {
+            threadId: parentThreadId,
+            providerSessionId: "provider-session:mcp-remote-manual",
+            providerInstanceId: codexInstanceId,
+          },
+          client: undefined,
+          capabilities: new Set(["orchestration"]),
+          issuedAt: 1,
+        };
+
+        yield* Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          const manual = yield* service.delegateTask(scope, {
+            task: "Review the change.",
+            target: {
+              environmentId: remoteEnvironmentId,
+              providerInstanceId: peerClaudeInstanceId,
+              driverKind: ProviderDriverKind.make("codex"),
+              options: [{ id: "reasoningEffort", value: "low" }],
+            },
+            clientRequestId: "delegate-remote-manual",
+          });
+          assert.equal(manual.taskId, taskId);
+          assert.equal(manual.status, "running");
+          workerPolicy = { mode: "auto" };
+          yield* service.delegateTask(scope, {
+            task: "Ship it.",
+            target: { environmentId: remoteEnvironmentId },
+            clientRequestId: "delegate-remote-auto",
+          });
+          const calls = yield* Ref.get(forwardedCalls);
+          assert.deepEqual(calls[0], {
+            target: {
+              environmentId: remoteEnvironmentId,
+              providerInstanceId: peerClaudeInstanceId,
+            },
+            manualWorker: {
+              modelSelection: {
+                instanceId: localClaudeInstanceId,
+                model: "claude-sonnet-4-6",
+                options: [{ id: "reasoningEffort", value: "high" }],
+              },
+              driverKind: ProviderDriverKind.make("claudeAgent"),
+            },
+          });
+          assert.deepEqual(calls[1], {
+            target: { environmentId: remoteEnvironmentId },
+            manualWorker: undefined,
+          });
+        }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(layerDependencies))));
+      }),
+  );
+
   it.effect("reports a restart-cut child as working until its continuation settles", () =>
     Effect.gen(function* () {
       const parentThreadId = ThreadId.make("thread:mcp-restart-parent");

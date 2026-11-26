@@ -34,6 +34,8 @@ import {
   type OrchestratorMcpTarget,
   type OrchestratorMcpTaskCancelInput,
   type OrchestratorMcpTaskCancelResult,
+  type OrchestratorMcpTaskBoardInput,
+  type OrchestratorMcpTaskBoardResult,
   type OrchestratorMcpUpdateScheduledTaskInput,
   type OrchestratorMcpListScheduledTasksInput,
   type ProjectId,
@@ -193,6 +195,10 @@ export interface OrchestratorMcpServiceShape {
     scope: McpInvocationScope,
     input: OrchestratorMcpTaskCancelInput,
   ) => Effect.Effect<OrchestratorMcpTaskCancelResult, OrchestratorMcpFailure>;
+  readonly taskBoard: (
+    scope: McpInvocationScope,
+    input: OrchestratorMcpTaskBoardInput,
+  ) => Effect.Effect<OrchestratorMcpTaskBoardResult, OrchestratorMcpFailure>;
   readonly createThreads: (
     scope: McpInvocationScope,
     input: OrchestratorMcpCreateThreadsInput,
@@ -343,19 +349,30 @@ function listCapabilityModels(input: {
   ]);
   const modelText = (model: ServerProviderModel) =>
     `${model.slug} ${model.name} ${model.subProvider ?? ""}`.toLowerCase();
+  const rawQuery = input.searchTerms.join(" ");
+  const exactMatches =
+    rawQuery.length > 0 ? visible.filter((model) => model.slug.toLowerCase() === rawQuery) : [];
   // Part of a provider word ("agent" in "claudeAgent") names the provider unless a model matches it.
   const modelTerms = input.searchTerms.filter(
     (term) =>
       !providerWords.has(term) &&
       (!providerText.includes(term) || visible.some((model) => modelText(model).includes(term))),
   );
-  if (modelTerms.length > 0) {
-    const matches = visible.filter((model) => {
-      const text = modelText(model);
-      return modelTerms.every((term) => text.includes(term));
-    });
-    const listed = matches.slice(0, LISTED_MODEL_LIMIT);
-    return { listed, omitted: matches.length - listed.length };
+  if (modelTerms.length > 0 || exactMatches.length > 0) {
+    const matches =
+      modelTerms.length > 0
+        ? visible.filter((model) => {
+            const text = modelText(model);
+            return modelTerms.every((term) => text.includes(term));
+          })
+        : [];
+    const exactSet = new Set(exactMatches);
+    const ordered =
+      exactMatches.length === 0
+        ? matches
+        : [...exactMatches, ...matches.filter((model) => !exactSet.has(model))];
+    const listed = ordered.slice(0, LISTED_MODEL_LIMIT);
+    return { listed, omitted: ordered.length - listed.length };
   }
   const current = visible.filter((model) => !model.isLegacy);
   const shown = new Set(
@@ -1470,6 +1487,24 @@ const make = Effect.gen(function* () {
     const parent = yield* loadCallerRecords(threadScope.thread.threadId, ["runs"]);
     return { scope: threadScope, parent } as const;
   });
+
+  /** The model a manual worker policy pins delegated tasks of this thread to, if any. */
+  const manualWorkerSelection = (thread: OrchestrationV2ThreadProjection["thread"]) =>
+    thread.lineage?.orchestrator === true && thread.orchestratorWorkerPolicy?.mode === "manual"
+      ? thread.orchestratorWorkerPolicy.modelSelection
+      : undefined;
+
+  /** Manual worker target fields overlaid on a task's target; empty in auto mode. */
+  const manualWorkerTargetFields = (
+    manualWorker: ReturnType<typeof manualWorkerSelection>,
+  ): Pick<OrchestratorMcpTarget, "providerInstanceId" | "model" | "options"> =>
+    manualWorker === undefined
+      ? {}
+      : {
+          providerInstanceId: manualWorker.instanceId,
+          model: manualWorker.model,
+          ...(manualWorker.options === undefined ? {} : { options: manualWorker.options }),
+        };
 
   const resolveProjectTarget = (
     parent: Pick<OrchestrationV2ThreadProjection, "thread"> | undefined,
@@ -2809,25 +2844,39 @@ const make = Effect.gen(function* () {
 
     capabilities: Effect.fn("OrchestratorMcpService.capabilities")(function* (scope, input = {}) {
       const { parent, limits } = yield* loadCaller(scope, []);
-      const cwd = parent === undefined ? undefined : yield* parentWorkspaceCwd(parent);
+      const targetProjectId = parent?.thread.projectId ?? input.projectId;
+      const parentCwd = parent === undefined ? undefined : yield* parentWorkspaceCwd(parent);
+      const targetCwd =
+        parentCwd ??
+        (input.projectId === undefined
+          ? undefined
+          : yield* projects.getById(input.projectId).pipe(
+              Effect.map(Option.map((project) => project.workspaceRoot)),
+              Effect.map(Option.getOrUndefined),
+              Effect.orElseSucceed(() => undefined),
+            ));
       const machineProviders = yield* loadProviders;
       const unscanned =
-        cwd === undefined
+        parentCwd === undefined
           ? []
           : machineProviders.filter(
               (provider) =>
                 provider.enabled &&
-                !provider.workspaceSnapshots?.some((snapshot) => snapshot.cwd === cwd),
+                !provider.workspaceSnapshots?.some((snapshot) => snapshot.cwd === parentCwd),
             );
-      if (cwd !== undefined && unscanned.length > 0) {
-        yield* Effect.forEach(unscanned, (provider) => scanWorkspace(provider.instanceId, cwd), {
-          concurrency: "unbounded",
-          discard: true,
-        });
+      if (parentCwd !== undefined && unscanned.length > 0) {
+        yield* Effect.forEach(
+          unscanned,
+          (provider) => scanWorkspace(provider.instanceId, parentCwd),
+          {
+            concurrency: "unbounded",
+            discard: true,
+          },
+        );
       }
       const providers = withWorkspaceModels(
         unscanned.length > 0 ? yield* loadProviders : machineProviders,
-        cwd,
+        targetCwd,
       );
       const orchestrationCapableInstanceIds = yield* loadOrchestrationCapableInstanceIds();
       const settings = yield* serverSettings.getSettings.pipe(
@@ -2850,14 +2899,10 @@ const make = Effect.gen(function* () {
         runtimeMode: limits.runtimeMode,
         interactionMode: limits.interactionMode,
         providers: providers.map((provider) => {
-          // Snapshots list instances any project enables; delegate_task checks the caller's project.
+          // Snapshots list instances any project enables; delegate_task checks the target project.
           const enabledForCaller =
-            parent === undefined ||
-            resolveProjectProviderInstanceEnabled(
-              settings,
-              parent.thread.projectId,
-              provider.instanceId,
-            );
+            targetProjectId === undefined ||
+            resolveProjectProviderInstanceEnabled(settings, targetProjectId, provider.instanceId);
           const constraints = providerConstraints(
             enabledForCaller ? provider : { ...provider, enabled: false },
             orchestrationCapableInstanceIds.has(provider.instanceId),
@@ -2918,10 +2963,41 @@ const make = Effect.gen(function* () {
       if (input.target !== undefined && environmentId !== undefined) {
         yield* requireCapability(callerScope);
         const scope = yield* requireThreadScope(callerScope, "delegate_task");
+        const parent = yield* loadCallerRecords(scope.thread.threadId, ["runs"]);
+        const manualWorker = manualWorkerSelection(parent.thread);
+        const manualDriver =
+          manualWorker === undefined
+            ? undefined
+            : (yield* loadProviders).find(
+                (provider) => provider.instanceId === manualWorker.instanceId,
+              )?.driver;
         // The task's child runs as an ordinary thread there; this thread keeps the task.
+        // A manual worker policy resolves its pinned model against the peer's providers.
         const { taskId } = yield* remoteDelegation.delegate(scope, {
           ...input,
-          target: { ...input.target, environmentId },
+          target:
+            manualWorker !== undefined
+              ? {
+                  environmentId,
+                  ...(input.target.projectId === undefined
+                    ? {}
+                    : { projectId: input.target.projectId }),
+                  ...(input.target.providerInstanceId === undefined
+                    ? {}
+                    : { providerInstanceId: input.target.providerInstanceId }),
+                }
+              : {
+                  ...input.target,
+                  environmentId,
+                },
+          ...(manualWorker !== undefined
+            ? {
+                manualWorker: {
+                  modelSelection: manualWorker,
+                  ...(manualDriver === undefined ? {} : { driverKind: manualDriver }),
+                },
+              }
+            : {}),
         });
         return yield* input.mode === "wait"
           ? awaitTask(scope, taskId, taskId, input.timeoutMs)
@@ -2958,9 +3034,12 @@ const make = Effect.gen(function* () {
         operation: "delegate-task",
       });
       const isRetryOfAcceptedDelegation = yield* threadManagement.hasReceipt(commandId);
+      const manualWorker = manualWorkerSelection(parent.thread);
+      const effectiveTarget: OrchestratorMcpTarget | undefined =
+        manualWorker !== undefined ? manualWorkerTargetFields(manualWorker) : input.target;
       const target = yield* resolveTargetRechecking({
         parent,
-        target: input.target,
+        target: effectiveTarget,
         providers,
         cwd: yield* parentWorkspaceCwd(parent),
         skipProjectEnablementFilter: isRetryOfAcceptedDelegation,
@@ -3062,6 +3141,27 @@ const make = Effect.gen(function* () {
           }
           const taskId = taskEvent.event.payload.id;
           const childThreadId = taskEvent.event.payload.childThreadId;
+          if (parent.thread.lineage?.orchestrator === true) {
+            const rawTitle = (
+              input.title ??
+              taskEvent.event.payload.title ??
+              input.task.split(/\r?\n/)[0] ??
+              "Delegated task"
+            )
+              .trim()
+              .slice(0, 140);
+            yield* threadManagement
+              .dispatch({
+                type: "thread.orchestrator-task.upsert",
+                commandId: CommandId.make(`${commandId}:orchestrator-task`),
+                threadId: scope.thread.threadId,
+                title: rawTitle.length > 0 ? rawTitle : "Delegated task",
+                status: "in_progress",
+                subagentId: taskId,
+                childThreadId,
+              })
+              .pipe(Effect.ignore);
+          }
           const childRunEvent = result.storedEvents.find(
             (stored) =>
               stored.event.type === "run.created" && stored.event.threadId === childThreadId,
@@ -3930,6 +4030,94 @@ const make = Effect.gen(function* () {
         runId: result.run.id,
         status: result.type === "already_terminal" ? result.run.status : "interrupt_requested",
       } satisfies OrchestratorMcpThreadInterruptResult;
+    }),
+    taskBoard: Effect.fn("OrchestratorMcpService.taskBoard")(function* (callerScope, input) {
+      const { scope, parent } = yield* loadThreadCaller(callerScope, "t3_task_board");
+      if (parent.thread.lineage?.orchestrator !== true) {
+        return yield* failure(
+          "invalid_request",
+          "t3_task_board is only available in project orchestrator threads.",
+        );
+      }
+      if (input.action === "list") {
+        return { tasks: parent.thread.orchestratorTasks ?? [] };
+      }
+      const key = yield* requestKey(undefined);
+      if (input.action === "set_status") {
+        if (input.taskId === undefined || input.status === undefined) {
+          return yield* failure(
+            "invalid_request",
+            "t3_task_board set_status requires both taskId and status.",
+          );
+        }
+        const exists = (parent.thread.orchestratorTasks ?? []).some(
+          (task) => task.id === input.taskId,
+        );
+        if (!exists) {
+          return yield* failure("task_not_found", `Task ${input.taskId} was not found.`);
+        }
+        yield* threadManagement
+          .dispatch({
+            type: "thread.orchestrator-task.set-status",
+            commandId: stableCommandId({
+              scope,
+              requestKey: key,
+              operation: "task-board-status",
+            }),
+            threadId: scope.thread.threadId,
+            taskId: input.taskId,
+            status: input.status,
+          })
+          .pipe(
+            Effect.mapError((error) =>
+              failure(
+                "orchestration_error",
+                `Unable to update task status: ${userFacingDispatchErrorMessage(error) ?? errorMessage(error)}`,
+              ),
+            ),
+          );
+        const refreshed = yield* loadThreadRecords(scope.thread.threadId, []);
+        const tasks = refreshed.thread.orchestratorTasks ?? [];
+        const task = tasks.find((candidate) => candidate.id === input.taskId);
+        return { tasks, ...(task === undefined ? {} : { task }) };
+      }
+      if (input.title === undefined) {
+        return yield* failure("invalid_request", "t3_task_board upsert requires a title.");
+      }
+      const commandId = stableCommandId({
+        scope,
+        requestKey: key,
+        operation: "task-board-upsert",
+      });
+      yield* threadManagement
+        .dispatch({
+          type: "thread.orchestrator-task.upsert",
+          commandId,
+          threadId: scope.thread.threadId,
+          ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
+          title: input.title,
+          ...(input.parentTaskId === undefined ? {} : { parentTaskId: input.parentTaskId }),
+          ...(input.status === undefined ? {} : { status: input.status }),
+          ...(input.subagentId === undefined ? {} : { subagentId: input.subagentId }),
+          ...(input.childThreadId === undefined ? {} : { childThreadId: input.childThreadId }),
+        })
+        .pipe(
+          Effect.mapError((error) =>
+            failure(
+              "orchestration_error",
+              `Unable to save task: ${userFacingDispatchErrorMessage(error) ?? errorMessage(error)}`,
+            ),
+          ),
+        );
+      const refreshed = yield* loadThreadRecords(scope.thread.threadId, []);
+      const tasks = refreshed.thread.orchestratorTasks ?? [];
+      const task =
+        input.taskId !== undefined
+          ? tasks.find((candidate) => candidate.id === input.taskId)
+          : input.subagentId != null
+            ? tasks.find((candidate) => candidate.subagentId === input.subagentId)
+            : tasks.at(-1);
+      return { tasks, ...(task === undefined ? {} : { task }) };
     }),
   });
 });

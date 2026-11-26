@@ -17,6 +17,7 @@ import {
 
 function makeUiState(overrides: Partial<UiState> = {}): UiState {
   return {
+    sidebarMode: "threads",
     projectExpandedById: {},
     projectOrder: [],
     sidebarProjectScopeKeys: [],
@@ -117,6 +118,7 @@ describe("parsePersistedState", () => {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
+      sidebarMode: "threads",
       sidebarProjectScopeKeys: [],
       pullRequestMergeMethod: "merge",
     });
@@ -203,6 +205,7 @@ describe("uiStateStore persistence", () => {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
+      sidebarMode: "threads",
       sidebarProjectScopeKeys: [],
       sidebarProjectScopeKey: null,
       pullRequestMergeMethod: "merge",
@@ -221,6 +224,14 @@ describe("uiStateStore persistence", () => {
     ) as PersistedUiState;
 
     expect(parsePersistedState(persisted).sidebarProjectScopeKeys).toEqual(keys);
+  });
+
+  it("persists and restores sidebarMode across reloads", () => {
+    persistState(makeUiState({ sidebarMode: "orchestrator" }));
+    const persisted = JSON.parse(
+      localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
+    ) as PersistedUiState;
+    expect(parsePersistedState(persisted).sidebarMode).toBe("orchestrator");
   });
 
   it("keeps a single-project scope readable by older clients", () => {

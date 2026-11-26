@@ -2543,6 +2543,7 @@ export default function ChatView(props: ChatViewProps) {
     addFilesSurfaceStable,
     addPullRequestSurfaceStable,
     addPullRequestsSurfaceStable,
+    addTasksSurfaceStable,
     closePreviewPanelStable,
     copyRightPanelFilePathStable,
     createBrowserSurface,
@@ -3441,10 +3442,25 @@ export default function ChatView(props: ChatViewProps) {
     openToolDiff: onOpenToolDiffStable,
     runShellCommand: runSideChatShellCommandStable,
   };
+  const isOrchestratorThread = activeThreadShell?.lineage.orchestrator === true;
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens the Tasks right panel once by default when first visiting an orchestrator thread with no saved panel state
+  useEffect(() => {
+    if (embedded || !activeThread || !isOrchestratorThread || !activeThreadRef) return;
+    const key = scopedThreadKey(activeThreadRef);
+    const store = useRightPanelStore.getState();
+    if (store.byThreadKey[key] === undefined) {
+      store.open(activeThreadRef, "tasks");
+    }
+  }, [activeThread, activeThreadRef, embedded, isOrchestratorThread]);
 
   if (!activeThread) {
     return embedded ? null : <NoActiveThreadState />;
   }
+
+  const hasOrchestratorTasks =
+    isOrchestratorThread ||
+    (serverProjection?.subagents.some((subagent) => subagent.origin === "app_owned") ?? false);
 
   const rightPanelContent = activeThreadRef ? (
     <RightPanelSurfaceContent
@@ -3593,10 +3609,12 @@ export default function ChatView(props: ChatViewProps) {
               isServerThread={isServerThread}
               activeThreadTitle={activeThread.title}
               activeThreadLinkOrigin={activeThreadShell?.linkOrigin?.label ?? null}
+              isOrchestrator={isOrchestratorThread}
               activeProject={activeProject ?? null}
               parentThreadLink={headerParentThreadLink}
               onOpenThread={onOpenRelatedThreadStable}
               rightPanelOpen={inlineRightPanelOwnsTitleBar}
+              onOpenTasks={addTasksSurfaceStable}
               onNewThreadInProject={handleNewThreadInActiveProjectStable}
               {...(activeDraftLogicalProjectKey
                 ? { onOpenProjectSettings: handleOpenDraftProjectSettingsStable }
@@ -4306,6 +4324,7 @@ export default function ChatView(props: ChatViewProps) {
           onAddPullRequest={addPullRequestSurfaceStable}
           onAddPullRequests={addPullRequestsSurfaceStable}
           onAddDevice={addDeviceSurfaceStable}
+          onAddTasks={addTasksSurfaceStable}
           onAddSideChat={sideChatsOffered ? openSideChatStable : undefined}
           browserAvailable={canOperatePreview && browserAvailable}
           terminalAvailable={activeProject !== null && canOperateTerminal}
@@ -4314,6 +4333,7 @@ export default function ChatView(props: ChatViewProps) {
           pullRequestAvailable={pullRequestSurfaceAvailable}
           pullRequestsAvailable={linkedItemsSurfaceAvailable}
           deviceAvailable={activeThreadRef !== null}
+          tasksAvailable={isServerThread && hasOrchestratorTasks}
           sideChatAvailable={sideChat.available}
           sideChatDisabledReason={sideChatDisabledReason}
         >

@@ -79,7 +79,11 @@ import {
   materializePiT3McpExtension,
   resolvePiLaunchArgs,
 } from "./mcpInjection.ts";
-import { PI_FILE_CHANGE_TOOLS, PI_T3_SERVICE_TIER_COMMAND } from "./mcpExtensionSource.ts";
+import {
+  PI_FILE_CHANGE_TOOLS,
+  PI_T3_ORCHESTRATOR_POLICY_COMMAND,
+  PI_T3_SERVICE_TIER_COMMAND,
+} from "./mcpExtensionSource.ts";
 import { PI_STANDARD_SERVICE_TIER } from "./modelCapabilities.ts";
 
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
@@ -93,6 +97,15 @@ const STREAM_FLUSH_MS = 50;
 const PI_REQUEST_TIMEOUT_MS = 15_000;
 const PI_SUBAGENT_ASYNC_PREFIX = "PI_SUBAGENT_ASYNC_JSON:";
 const decodePiJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
+const encodePiManualWorkerPolicy = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      mode: Schema.Literal("manual"),
+      instanceId: Schema.String,
+      model: Schema.String,
+    }),
+  ),
+);
 const PI_SESSION_TIMEOUT_MS = 60_000;
 const MAX_EXTENSION_STATUSES = 32;
 const MAX_EXTENSION_STATUS_KEY_LENGTH = 256;
@@ -694,6 +707,17 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       // Pi reloads extensions (resetting the tier) on paths the adapter cannot see, so a chosen tier
       // is resent every turn; Standard sends a clear only when an earlier tier may still be set.
       let serviceTierMayBeSet = false;
+      const launchOrchestratorWorkerPolicy =
+        mcpSession?.orchestrator === true && mcpSession.orchestratorWorkerPolicy?.mode === "manual"
+          ? encodePiManualWorkerPolicy({
+              mode: "manual",
+              instanceId: mcpSession.orchestratorWorkerPolicy.modelSelection.instanceId,
+              model: mcpSession.orchestratorWorkerPolicy.modelSelection.model,
+            })
+          : "";
+      // Pi reloads extensions (resetting to launch env) on handoff paths the adapter cannot see,
+      // so manual policies are resent every turn; Auto clears whenever launch or an earlier turn was manual.
+      let orchestratorWorkerPolicyMayBeSet = launchOrchestratorWorkerPolicy !== "";
       let appliedSessionName: string | null = null;
       const outOfTurnExtensionErrors: Array<PiRpcRecord> = [];
       let lastKnownLeaf: string | null = null;
@@ -3474,7 +3498,36 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             const continuation =
               turnInput.message.createdBy === "agent" &&
               turnInput.message.creationSource === "provider";
-            if (!continuation) yield* applySelection(turnInput.modelSelection);
+            if (!continuation) {
+              yield* applySelection(turnInput.modelSelection);
+              if (turnInput.appThread.lineage.orchestrator === true) {
+                const desiredPolicy =
+                  turnInput.appThread.orchestratorWorkerPolicy?.mode === "manual"
+                    ? encodePiManualWorkerPolicy({
+                        mode: "manual",
+                        instanceId:
+                          turnInput.appThread.orchestratorWorkerPolicy.modelSelection.instanceId,
+                        model: turnInput.appThread.orchestratorWorkerPolicy.modelSelection.model,
+                      })
+                    : "";
+                if (desiredPolicy !== "" || orchestratorWorkerPolicyMayBeSet) {
+                  orchestratorWorkerPolicyMayBeSet = true;
+                  const result = yield* request({
+                    type: "prompt",
+                    message: `/${PI_T3_ORCHESTRATOR_POLICY_COMMAND} ${desiredPolicy}`.trimEnd(),
+                  });
+                  // Pi before 0.99 acknowledges a handled extension command without a disposition.
+                  const disposition = recordString(result, "disposition");
+                  if (disposition !== undefined && disposition !== "handled") {
+                    return yield* protocolError(
+                      "T3 Code's Pi extension did not apply the orchestrator worker policy",
+                    );
+                  }
+                  orchestratorWorkerPolicyMayBeSet =
+                    desiredPolicy !== "" || launchOrchestratorWorkerPolicy !== "";
+                }
+              }
+            }
             if (turnInput.appThread.title !== appliedSessionName) {
               yield* request({
                 type: "set_session_name",

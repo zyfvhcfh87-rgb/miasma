@@ -6,6 +6,7 @@ import { useGT, useMessages } from "gt-react";
 import { CircleAlertIcon } from "lucide-react";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { ComposerControl } from "./ComposerControl";
+import { OrchestratorWorkerModelPicker } from "../orchestrator/OrchestratorWorkerModelPicker";
 import {
   ComposerFooterModeControls,
   ComposerModelPicker,
@@ -266,6 +267,14 @@ export function ComposerControlsBar(props: {
   ) : (
     <>
       {composerModelPicker}
+      <OrchestratorWorkerModelPicker
+        routeThreadRef={routeThreadRef}
+        providerInstanceEntries={providerInstanceEntries}
+        modelOptionsByInstance={modelOptionsByInstance}
+        size={controlSize}
+        compact={composerControlsCollapsed}
+        disabled={providerCatalogPending || isSendBusy}
+      />
 
       <>
         {restingBlockDefs.map((def, index) => {

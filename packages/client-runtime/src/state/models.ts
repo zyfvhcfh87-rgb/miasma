@@ -217,6 +217,8 @@ export interface EnvironmentThreadShell {
   /** Server-tracked open history for search ranking. */
   readonly opens?: import("@t3tools/contracts").OrchestrationV2ThreadOpens | null;
   readonly titleRegeneration?: { readonly requestId: string; readonly startedAt: string } | null;
+  readonly orchestratorWorkerPolicy?: OrchestrationV2ThreadShell["orchestratorWorkerPolicy"];
+  readonly orchestratorTaskCounts?: OrchestrationV2ThreadShell["orchestratorTaskCounts"];
   readonly deletedAt: string | null;
   readonly source: OrchestrationV2ThreadShell;
 }
@@ -373,6 +375,12 @@ export function presentThreadShell(
             requestId: thread.titleRegeneration.requestId,
             startedAt: iso(thread.titleRegeneration.startedAt),
           },
+    ...(thread.orchestratorWorkerPolicy !== undefined
+      ? { orchestratorWorkerPolicy: thread.orchestratorWorkerPolicy }
+      : {}),
+    ...(thread.orchestratorTaskCounts !== undefined
+      ? { orchestratorTaskCounts: thread.orchestratorTaskCounts }
+      : {}),
     deletedAt: nullableIso(thread.deletedAt),
     source: thread,
   };

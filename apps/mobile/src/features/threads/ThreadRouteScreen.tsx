@@ -1047,6 +1047,16 @@ function ThreadRouteContent(
                 hasThreadCwd={selectedThreadCwd !== null}
                 inspectorMode={inspectorMode}
                 onOpenFilesInspector={handleOpenFilesInspector}
+                onOpenTasksSheet={
+                  selectedThread.lineage.orchestrator === true ||
+                  selectedThread.orchestratorTaskCounts !== undefined
+                    ? () =>
+                        navigation.navigate("ThreadTasks", {
+                          environmentId: selectedThread.environmentId,
+                          threadId: selectedThread.id,
+                        })
+                    : undefined
+                }
                 onReturnToThread={props.onReturnToThread}
               />
             )

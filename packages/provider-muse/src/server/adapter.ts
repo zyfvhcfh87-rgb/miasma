@@ -42,6 +42,7 @@ import * as Stream from "effect/Stream";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import { buildCoordinatorOrchestratorInstructions } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import { museModelCapabilities, resolveMuseReasoningEffort } from "./modelCatalog.ts";
 import {
@@ -2210,13 +2211,19 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                 input: [
                   {
                     type: "text",
-                    text: buildRuntimeInstructions({
-                      agentFeedback: hasT3Mcp ? (turnInput.agentFeedback ?? "off") : "off",
-                      harness: "Muse Code",
-                      model: session.model ?? undefined,
-                      reasoningEffort: effort,
-                      runtimePolicy: turnInput.runtimePolicy,
-                    }),
+                    text:
+                      buildRuntimeInstructions({
+                        agentFeedback: hasT3Mcp ? (turnInput.agentFeedback ?? "off") : "off",
+                        harness: "Muse Code",
+                        model: session.model ?? undefined,
+                        reasoningEffort: effort,
+                        runtimePolicy: turnInput.runtimePolicy,
+                      }) +
+                      (hasT3Mcp && turnInput.appThread.lineage.orchestrator === true
+                        ? buildCoordinatorOrchestratorInstructions({
+                            workerPolicy: turnInput.appThread.orchestratorWorkerPolicy,
+                          })
+                        : ""),
                   },
                   ...parts,
                 ],

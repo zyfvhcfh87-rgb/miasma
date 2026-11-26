@@ -169,6 +169,9 @@ function commandThreadIds(command: OrchestrationV2Command): ReadonlyArray<Thread
     case "thread.runtime-mode.set":
     case "thread.interaction-mode.set":
     case "thread.model-selection.set":
+    case "thread.orchestrator-worker-policy.set":
+    case "thread.orchestrator-task.upsert":
+    case "thread.orchestrator-task.set-status":
     case "provider-session.detach":
     case "message.dispatch":
     case "notification.delivery.accept":

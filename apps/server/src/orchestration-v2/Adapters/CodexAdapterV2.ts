@@ -917,6 +917,9 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
     readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
     readonly modelSelection: ModelSelection;
     readonly hasT3Mcp?: boolean;
+    readonly orchestrator?: {
+      readonly workerPolicy?: import("@t3tools/contracts").OrchestratorWorkerPolicy | undefined;
+    };
     readonly agentFeedback?: AgentFeedbackMode;
     readonly browserToolsAvailable?: boolean;
     readonly deviceToolsAvailable?: boolean;
@@ -983,6 +986,7 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
               browser: input.browserToolsAvailable ?? true,
               device: input.deviceToolsAvailable ?? false,
             },
+            input.orchestrator,
           )
         : undefined;
     // Its own entry, so the folder list reaches the model without Miasma's MCP tools too.
@@ -8041,6 +8045,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               runtimePolicy: turnInput.runtimePolicy,
               modelSelection: turnInput.modelSelection,
               hasT3Mcp: mcpSession !== undefined,
+              ...(turnInput.appThread.lineage.orchestrator === true
+                ? {
+                    orchestrator: {
+                      workerPolicy: turnInput.appThread.orchestratorWorkerPolicy,
+                    },
+                  }
+                : {}),
               agentFeedback: turnInput.agentFeedback ?? "off",
               browserToolsAvailable: mcpSession?.browserToolsAvailable ?? true,
               deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,

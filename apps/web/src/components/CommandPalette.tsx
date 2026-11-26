@@ -61,6 +61,7 @@ import {
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
+  BotIcon,
   BugIcon,
   ChartNoAxesColumnIcon,
   CheckIcon,
@@ -72,6 +73,7 @@ import {
   FolderPlusIcon,
   MessageSquareDashedIcon,
   LinkIcon,
+  ListChecksIcon,
   MessageSquareIcon,
   PaletteIcon,
   RotateCcwIcon,
@@ -182,6 +184,7 @@ import {
   selectActiveRightPanel,
   useRightPanelStore,
 } from "../rightPanelStore";
+import { useUiStateStore } from "../uiStateStore";
 import { getLatestThreadForProject, sortThreads } from "@t3tools/client-runtime/state/thread-sort";
 import { effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import {
@@ -1540,7 +1543,43 @@ function OpenCommandPaletteDialog(props: {
         useRightPanelStore.getState().open(threadRef, "pull-requests");
       },
     });
+    if (
+      activeThread.lineage.orchestrator === true ||
+      activeThread.lineage.relationshipToParent === "subagent"
+    ) {
+      actionItems.push({
+        kind: "action",
+        value: "action:open-orchestrator-tasks",
+        searchTerms: ["tasks", "orchestrator", "subagents", "workers", "board"],
+        title: gt("Open Tasks panel"),
+        icon: <ListChecksIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          useRightPanelStore.getState().open(threadRef, "tasks");
+        },
+      });
+    }
   }
+
+  actionItems.push({
+    kind: "action",
+    value: "action:switch-to-orchestrator",
+    searchTerms: ["orchestrator", "coordinator", "manager", "sidebar", "agents"],
+    title: gt("Switch sidebar to Orchestrator"),
+    icon: <BotIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      useUiStateStore.getState().setSidebarMode("orchestrator");
+    },
+  });
+  actionItems.push({
+    kind: "action",
+    value: "action:switch-to-threads",
+    searchTerms: ["threads", "sidebar", "chats"],
+    title: gt("Switch sidebar to Threads"),
+    icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      useUiStateStore.getState().setSidebarMode("threads");
+    },
+  });
 
   if (activeThread !== null && canShareActiveThreadWithGuest) {
     const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
