@@ -14,6 +14,7 @@ import {
   ThreadId,
   type ChatAttachment,
   type ModelSelection,
+  type OrchestratorWorkerPolicy,
   type OrchestrationV2AppThread,
   type OrchestrationV2ProviderThread,
   OrchestrationV2UserInputQuestion,
@@ -57,7 +58,11 @@ import {
 } from "./adapter.ts";
 import { makePiRpcConnection, type PiRpcRecord } from "./rpc.ts";
 import { loadMcpBridge } from "./mcpBridge.testkit.ts";
-import { PI_T3_SERVICE_TIER_COMMAND } from "./mcpExtensionSource.ts";
+import {
+  PI_T3_ORCHESTRATOR_POLICY_COMMAND,
+  PI_T3_SERVICE_TIER_COMMAND,
+  T3_PI_ORCHESTRATOR_WORKER_POLICY_ENV,
+} from "./mcpExtensionSource.ts";
 import { turnItemOutputText } from "../../../client-runtime/src/work-log/itemDetail.ts";
 
 const layerTest = Layer.mergeAll(
@@ -189,6 +194,8 @@ interface FakePi {
   }) => void;
   /** T3 extension's service tier as each prompt was sent; Pi resets it with each session. */
   readonly promptServiceTiers: ReadonlyArray<string | null>;
+  /** T3 extension's orchestrator worker policy as each prompt was sent; reloads restore launch env. */
+  readonly promptOrchestratorPolicies: ReadonlyArray<string | null>;
   /** Pi reloads extensions without the adapter seeing it, e.g. a user extension's ctx.newSession(). */
   readonly reloadExtensions: (newSessionFile?: string) => void;
   /** Pi before 0.99 acknowledges prompts without a disposition. */
@@ -253,10 +260,14 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
   const promptThinkingLevels: Array<string> = [];
   const promptModels: Array<string> = [];
   const promptServiceTiers: Array<string | null> = [];
+  const promptOrchestratorPolicies: Array<string | null> = [];
   let serviceTier: string | null = null;
+  let orchestratorPolicy: string | null = null;
+  let launchOrchestratorPolicy: string | null = null;
   let promptDisposition = true;
   let currentModel = "default";
   const serviceTierCommand = `/${PI_T3_SERVICE_TIER_COMMAND}`;
+  const orchestratorPolicyCommand = `/${PI_T3_ORCHESTRATOR_POLICY_COMMAND}`;
 
   const emit = (record: PiRpcRecord, chunkBytes?: number) =>
     Effect.gen(function* () {
@@ -317,6 +328,11 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
       case "prompt":
         if (String(record["message"]).startsWith(serviceTierCommand)) {
           serviceTier = String(record["message"]).slice(serviceTierCommand.length).trim() || null;
+          return promptDisposition ? { ...base, data: { disposition: "handled" } } : base;
+        }
+        if (String(record["message"]).startsWith(orchestratorPolicyCommand)) {
+          orchestratorPolicy =
+            String(record["message"]).slice(orchestratorPolicyCommand.length).trim() || null;
           return promptDisposition ? { ...base, data: { disposition: "handled" } } : base;
         }
         if (isCompacting) {
@@ -384,11 +400,13 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
         const record = decodeJsonLine(line) as PiRpcRecord;
         if (
           record["type"] === "prompt" &&
-          !String(record["message"]).startsWith(serviceTierCommand)
+          !String(record["message"]).startsWith(serviceTierCommand) &&
+          !String(record["message"]).startsWith(orchestratorPolicyCommand)
         ) {
           promptThinkingLevels.push(thinkingLevel);
           promptModels.push(currentModel);
           promptServiceTiers.push(serviceTier);
+          promptOrchestratorPolicies.push(orchestratorPolicy);
         }
         allRequests.push(record);
         yield* Queue.offer(requests, record);
@@ -421,6 +439,9 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
           args: command.args.map(String),
           env: command.options.env ?? {},
         };
+        const rawPolicy = lastSpawn.env[T3_PI_ORCHESTRATOR_WORKER_POLICY_ENV];
+        launchOrchestratorPolicy = typeof rawPolicy === "string" ? rawPolicy : null;
+        orchestratorPolicy = launchOrchestratorPolicy;
       }
       return ChildProcessSpawner.makeHandle({
         pid: ChildProcessSpawner.ProcessId(FAKE_PID),
@@ -458,8 +479,10 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
       thinkingLevel = change.thinking ?? thinkingLevel;
     },
     promptServiceTiers,
+    promptOrchestratorPolicies,
     reloadExtensions: (newSessionFile) => {
       serviceTier = null;
+      orchestratorPolicy = launchOrchestratorPolicy;
       if (newSessionFile !== undefined) sessionFile = newSessionFile;
     },
     omitPromptDisposition: () => {
@@ -593,7 +616,11 @@ const openRuntime = Effect.fnUntraced(function* (
   return { runtime, takeEvent };
 });
 
-const makeAppThread = Effect.fnUntraced(function* (model: string, threadId = THREAD_ID) {
+const makeAppThread = Effect.fnUntraced(function* (
+  model: string,
+  threadId = THREAD_ID,
+  orchestrator?: { readonly workerPolicy?: OrchestratorWorkerPolicy },
+) {
   const now = yield* DateTime.now;
   return {
     createdBy: "user",
@@ -608,7 +635,15 @@ const makeAppThread = Effect.fnUntraced(function* (model: string, threadId = THR
     branch: null,
     worktreePath: null,
     activeProviderThreadId: null,
-    lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+    lineage: {
+      parentThreadId: null,
+      relationshipToParent: null,
+      rootThreadId: threadId,
+      ...(orchestrator === undefined ? {} : { orchestrator: true }),
+    },
+    ...(orchestrator?.workerPolicy === undefined
+      ? {}
+      : { orchestratorWorkerPolicy: orchestrator.workerPolicy }),
     forkedFrom: null,
     createdAt: now,
     updatedAt: now,
@@ -630,8 +665,9 @@ const startTurn = Effect.fnUntraced(function* (
   runOrdinal = 1,
   threadId = THREAD_ID,
   continuation = false,
+  orchestrator?: { readonly workerPolicy?: OrchestratorWorkerPolicy },
 ) {
-  const appThread = yield* makeAppThread(model, threadId);
+  const appThread = yield* makeAppThread(model, threadId, orchestrator);
   const runId = RunId.make(`run:${threadId}:${runOrdinal}`);
   yield* runtime.startTurn({
     appThread,
@@ -2883,6 +2919,135 @@ describe("PiAdapterV2", () => {
         ],
       );
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect(
+    "reapplies orchestrator worker policy across Pi extension reloads for Auto->Manual and Manual->Auto",
+    () =>
+      Effect.gen(function* () {
+        const manualPolicy: OrchestratorWorkerPolicy = {
+          mode: "manual",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("claude-work"),
+            model: "claude-sonnet-4-6",
+          },
+        };
+        const expectedManual = JSON.stringify({
+          mode: "manual",
+          instanceId: "claude-work",
+          model: "claude-sonnet-4-6",
+        });
+
+        // Case 1: Launched in Auto, switched to Manual, reloaded by handoff, then cleared to Auto.
+        const fakeAutoLaunch = yield* makeFakePi;
+        const { runtime: autoRuntime, takeEvent: takeAutoEvent } =
+          yield* openRuntime(fakeAutoLaunch);
+        const autoThread = yield* autoRuntime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+        const runOrchestratorTurn = (
+          fake: FakePi,
+          rt: ProviderAdapter.ProviderAdapterV2SessionRuntime,
+          pt: OrchestrationV2ProviderThread,
+          take: (
+            predicate: (event: ProviderAdapter.ProviderAdapterV2Event) => boolean,
+          ) => Effect.Effect<ProviderAdapter.ProviderAdapterV2Event>,
+          text: string,
+          workerPolicy: OrchestratorWorkerPolicy,
+          ordinal: number,
+        ) =>
+          Effect.gen(function* () {
+            yield* startTurn(rt, pt, "default", [], text, undefined, ordinal, THREAD_ID, false, {
+              workerPolicy,
+            });
+            while (String((yield* fake.takeRequest("prompt"))["message"]).startsWith("/")) {}
+            yield* fake.emit({ type: "agent_start" });
+            yield* fake.emit({ type: "agent_end", messages: [], willRetry: false });
+            yield* fake.emit({ type: "agent_settled" });
+            yield* take((event) => event.type === "turn.terminal");
+          });
+
+        yield* runOrchestratorTurn(
+          fakeAutoLaunch,
+          autoRuntime,
+          autoThread,
+          takeAutoEvent,
+          "First manual turn",
+          manualPolicy,
+          1,
+        );
+        // Simulate a Pi handoff reloading extensions back to launch env (Auto).
+        fakeAutoLaunch.reloadExtensions();
+        yield* runOrchestratorTurn(
+          fakeAutoLaunch,
+          autoRuntime,
+          autoThread,
+          takeAutoEvent,
+          "After handoff still manual",
+          manualPolicy,
+          2,
+        );
+        yield* runOrchestratorTurn(
+          fakeAutoLaunch,
+          autoRuntime,
+          autoThread,
+          takeAutoEvent,
+          "Back to auto",
+          { mode: "auto" },
+          3,
+        );
+        assert.deepEqual(fakeAutoLaunch.promptOrchestratorPolicies, [
+          expectedManual,
+          expectedManual,
+          null,
+        ]);
+
+        // Case 2: Launched in Manual env, switched to Auto, reloaded by handoff (restores Manual env).
+        const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* mcpSessions.set({
+          environmentId: EnvironmentId.make("env-pi-test"),
+          threadId: THREAD_ID,
+          providerSessionId: SESSION_ID,
+          providerInstanceId: PI_INSTANCE_ID,
+          endpoint: "http://127.0.0.1:1/mcp",
+          authorizationHeader: "Bearer test-token",
+          browserToolsAvailable: false,
+          orchestrator: true,
+          orchestratorWorkerPolicy: manualPolicy,
+        });
+        const fakeManualLaunch = yield* makeFakePi;
+        const { runtime: manualRuntime, takeEvent: takeManualEvent } =
+          yield* openRuntime(fakeManualLaunch);
+        const manualThread = yield* manualRuntime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+
+        yield* runOrchestratorTurn(
+          fakeManualLaunch,
+          manualRuntime,
+          manualThread,
+          takeManualEvent,
+          "Switched to auto",
+          { mode: "auto" },
+          1,
+        );
+        // Reload restores the Manual launch environment; adapter must re-clear to Auto on next prompt.
+        fakeManualLaunch.reloadExtensions();
+        yield* runOrchestratorTurn(
+          fakeManualLaunch,
+          manualRuntime,
+          manualThread,
+          takeManualEvent,
+          "Still auto after handoff",
+          { mode: "auto" },
+          2,
+        );
+        assert.deepEqual(fakeManualLaunch.promptOrchestratorPolicies, [null, null]);
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
   it.effect("tracks the session file a user extension switches to during a turn", () =>

@@ -349,19 +349,30 @@ function listCapabilityModels(input: {
   ]);
   const modelText = (model: ServerProviderModel) =>
     `${model.slug} ${model.name} ${model.subProvider ?? ""}`.toLowerCase();
+  const rawQuery = input.searchTerms.join(" ");
+  const exactMatches =
+    rawQuery.length > 0 ? visible.filter((model) => model.slug.toLowerCase() === rawQuery) : [];
   // Part of a provider word ("agent" in "claudeAgent") names the provider unless a model matches it.
   const modelTerms = input.searchTerms.filter(
     (term) =>
       !providerWords.has(term) &&
       (!providerText.includes(term) || visible.some((model) => modelText(model).includes(term))),
   );
-  if (modelTerms.length > 0) {
-    const matches = visible.filter((model) => {
-      const text = modelText(model);
-      return modelTerms.every((term) => text.includes(term));
-    });
-    const listed = matches.slice(0, LISTED_MODEL_LIMIT);
-    return { listed, omitted: matches.length - listed.length };
+  if (modelTerms.length > 0 || exactMatches.length > 0) {
+    const matches =
+      modelTerms.length > 0
+        ? visible.filter((model) => {
+            const text = modelText(model);
+            return modelTerms.every((term) => text.includes(term));
+          })
+        : [];
+    const exactSet = new Set(exactMatches);
+    const ordered =
+      exactMatches.length === 0
+        ? matches
+        : [...exactMatches, ...matches.filter((model) => !exactSet.has(model))];
+    const listed = ordered.slice(0, LISTED_MODEL_LIMIT);
+    return { listed, omitted: ordered.length - listed.length };
   }
   const current = visible.filter((model) => !model.isLegacy);
   const shown = new Set(
@@ -2833,25 +2844,39 @@ const make = Effect.gen(function* () {
 
     capabilities: Effect.fn("OrchestratorMcpService.capabilities")(function* (scope, input = {}) {
       const { parent, limits } = yield* loadCaller(scope, []);
-      const cwd = parent === undefined ? undefined : yield* parentWorkspaceCwd(parent);
+      const targetProjectId = parent?.thread.projectId ?? input.projectId;
+      const parentCwd = parent === undefined ? undefined : yield* parentWorkspaceCwd(parent);
+      const targetCwd =
+        parentCwd ??
+        (input.projectId === undefined
+          ? undefined
+          : yield* projects.getById(input.projectId).pipe(
+              Effect.map(Option.map((project) => project.workspaceRoot)),
+              Effect.map(Option.getOrUndefined),
+              Effect.orElseSucceed(() => undefined),
+            ));
       const machineProviders = yield* loadProviders;
       const unscanned =
-        cwd === undefined
+        parentCwd === undefined
           ? []
           : machineProviders.filter(
               (provider) =>
                 provider.enabled &&
-                !provider.workspaceSnapshots?.some((snapshot) => snapshot.cwd === cwd),
+                !provider.workspaceSnapshots?.some((snapshot) => snapshot.cwd === parentCwd),
             );
-      if (cwd !== undefined && unscanned.length > 0) {
-        yield* Effect.forEach(unscanned, (provider) => scanWorkspace(provider.instanceId, cwd), {
-          concurrency: "unbounded",
-          discard: true,
-        });
+      if (parentCwd !== undefined && unscanned.length > 0) {
+        yield* Effect.forEach(
+          unscanned,
+          (provider) => scanWorkspace(provider.instanceId, parentCwd),
+          {
+            concurrency: "unbounded",
+            discard: true,
+          },
+        );
       }
       const providers = withWorkspaceModels(
         unscanned.length > 0 ? yield* loadProviders : machineProviders,
-        cwd,
+        targetCwd,
       );
       const orchestrationCapableInstanceIds = yield* loadOrchestrationCapableInstanceIds();
       const settings = yield* serverSettings.getSettings.pipe(
@@ -2874,14 +2899,10 @@ const make = Effect.gen(function* () {
         runtimeMode: limits.runtimeMode,
         interactionMode: limits.interactionMode,
         providers: providers.map((provider) => {
-          // Snapshots list instances any project enables; delegate_task checks the caller's project.
+          // Snapshots list instances any project enables; delegate_task checks the target project.
           const enabledForCaller =
-            parent === undefined ||
-            resolveProjectProviderInstanceEnabled(
-              settings,
-              parent.thread.projectId,
-              provider.instanceId,
-            );
+            targetProjectId === undefined ||
+            resolveProjectProviderInstanceEnabled(settings, targetProjectId, provider.instanceId);
           const constraints = providerConstraints(
             enabledForCaller ? provider : { ...provider, enabled: false },
             orchestrationCapableInstanceIds.has(provider.instanceId),

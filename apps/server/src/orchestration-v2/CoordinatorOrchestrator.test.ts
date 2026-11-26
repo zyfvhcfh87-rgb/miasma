@@ -244,7 +244,6 @@ describe("Coordinator Orchestrator", () => {
               },
             },
           ],
-          effects: [],
         });
         yield* sink.write({
           commandId: CommandId.make("cmd:race-task-sync"),
@@ -261,7 +260,6 @@ describe("Coordinator Orchestrator", () => {
               },
             },
           ],
-          effects: [],
         });
 
         const updated = yield* orchestrator.getThreadProjection(threadId);

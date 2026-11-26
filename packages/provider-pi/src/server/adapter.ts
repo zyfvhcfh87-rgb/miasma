@@ -707,7 +707,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       // Pi reloads extensions (resetting the tier) on paths the adapter cannot see, so a chosen tier
       // is resent every turn; Standard sends a clear only when an earlier tier may still be set.
       let serviceTierMayBeSet = false;
-      let appliedOrchestratorWorkerPolicy: string =
+      const launchOrchestratorWorkerPolicy =
         mcpSession?.orchestrator === true && mcpSession.orchestratorWorkerPolicy?.mode === "manual"
           ? encodePiManualWorkerPolicy({
               mode: "manual",
@@ -715,6 +715,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               model: mcpSession.orchestratorWorkerPolicy.modelSelection.model,
             })
           : "";
+      // Pi reloads extensions (resetting to launch env) on handoff paths the adapter cannot see,
+      // so manual policies are resent every turn; Auto clears whenever launch or an earlier turn was manual.
+      let orchestratorWorkerPolicyMayBeSet = launchOrchestratorWorkerPolicy !== "";
       let appliedSessionName: string | null = null;
       const outOfTurnExtensionErrors: Array<PiRpcRecord> = [];
       let lastKnownLeaf: string | null = null;
@@ -3507,12 +3510,21 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                         model: turnInput.appThread.orchestratorWorkerPolicy.modelSelection.model,
                       })
                     : "";
-                if (desiredPolicy !== appliedOrchestratorWorkerPolicy) {
-                  yield* request({
+                if (desiredPolicy !== "" || orchestratorWorkerPolicyMayBeSet) {
+                  orchestratorWorkerPolicyMayBeSet = true;
+                  const result = yield* request({
                     type: "prompt",
                     message: `/${PI_T3_ORCHESTRATOR_POLICY_COMMAND} ${desiredPolicy}`.trimEnd(),
-                  }).pipe(Effect.ignore);
-                  appliedOrchestratorWorkerPolicy = desiredPolicy;
+                  });
+                  // Pi before 0.99 acknowledges a handled extension command without a disposition.
+                  const disposition = recordString(result, "disposition");
+                  if (disposition !== undefined && disposition !== "handled") {
+                    return yield* protocolError(
+                      "T3 Code's Pi extension did not apply the orchestrator worker policy",
+                    );
+                  }
+                  orchestratorWorkerPolicyMayBeSet =
+                    desiredPolicy !== "" || launchOrchestratorWorkerPolicy !== "";
                 }
               }
             }

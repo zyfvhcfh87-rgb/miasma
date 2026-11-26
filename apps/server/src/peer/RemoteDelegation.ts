@@ -271,19 +271,19 @@ const make = Effect.gen(function* () {
     function* (
       scope: ThreadScope,
       environmentId: EnvironmentId,
+      projectId: ProjectId,
       manualWorker: {
         readonly modelSelection: ModelSelection;
         readonly driverKind?: ProviderDriverKind | undefined;
       },
       requestedInstanceId: ProviderInstanceId | undefined,
     ) {
-      const { providers } = yield* forwarding.call(
-        scope,
-        RemoteCapabilitiesTool,
-        environmentId,
-        {},
-      );
       const pinnedModel = manualWorker.modelSelection.model;
+      const search = pinnedModel.trim().slice(0, 200);
+      const { providers } = yield* forwarding.call(scope, RemoteCapabilitiesTool, environmentId, {
+        projectId,
+        ...(search.length > 0 ? { search } : {}),
+      });
       const matchesDriver = (provider: (typeof providers)[number]) =>
         manualWorker.driverKind === undefined || provider.driverKind === manualWorker.driverKind;
       const eligible = providers.filter(
@@ -368,15 +368,25 @@ const make = Effect.gen(function* () {
       }
       // The provider and model inherit as they do for a task here. Another
       // provider there has no model to inherit, so the caller names one.
-      // When a manual worker policy is active, resolve its pinned model against the peer's providers
-      // and never inherit or forward caller driverKind/options from another model.
+      // When a manual worker policy is active, resolve the destination project first so the peer
+      // filters candidates by project enablement and never forwards caller driverKind/options.
       const inherited = parent.thread.modelSelection;
-      const manualResolved =
+      const resolvedManualProjectId =
         input.manualWorker === undefined
+          ? undefined
+          : yield* resolveRemoteProject(
+              scope,
+              target.environmentId,
+              parent.thread.projectId,
+              target.projectId,
+            );
+      const manualResolved =
+        input.manualWorker === undefined || resolvedManualProjectId === undefined
           ? undefined
           : yield* resolveManualRemoteTarget(
               scope,
               target.environmentId,
+              resolvedManualProjectId,
               input.manualWorker,
               target.providerInstanceId,
             );
@@ -418,12 +428,14 @@ const make = Effect.gen(function* () {
         input.interactionMode === undefined || input.interactionMode === "inherit"
           ? undefined
           : yield* resolveInteractionMode(parent.thread.interactionMode, input.interactionMode);
-      const projectId = yield* resolveRemoteProject(
-        scope,
-        target.environmentId,
-        parent.thread.projectId,
-        target.projectId,
-      );
+      const projectId =
+        resolvedManualProjectId ??
+        (yield* resolveRemoteProject(
+          scope,
+          target.environmentId,
+          parent.thread.projectId,
+          target.projectId,
+        ));
       // One key for the launch there and the record here, so a retry finds both.
       // Both are scoped to the provider session, as every key a caller passes is:
       // the forwarder scopes the launch's, and the record's names it.
