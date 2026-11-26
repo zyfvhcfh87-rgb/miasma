@@ -144,4 +144,25 @@ describe("deriveOrchestratorTaskBoard", () => {
     expect(board.inProgress).toHaveLength(0);
     expect(board.forReview).toHaveLength(0);
   });
+
+  it("keeps a failed subagent task in For Review when explicitly moved to for_review", () => {
+    const failedReopened = makeTask({
+      id: "task-failed-reopened",
+      key: "STO-9",
+      title: "Inspect flaky test failure",
+      status: "for_review",
+      subagentId: NodeId.make("sub-failed"),
+    });
+    const board = deriveOrchestratorTaskBoard({
+      thread: {
+        id: ThreadId.make("orch-1"),
+        title: "StorageViewer",
+        orchestratorTasks: [failedReopened],
+      },
+      subagents: [makeSubagent({ id: NodeId.make("sub-failed"), status: "failed" })],
+    });
+
+    expect(board.forReview.map((item) => item.id)).toEqual(["task-failed-reopened"]);
+    expect(board.needsAttention).toHaveLength(0);
+  });
 });

@@ -1,14 +1,17 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
   CommandId,
+  EventId,
   NodeId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderThreadId,
   ThreadId,
   isListedThreadLineage,
   isOrchestratorThreadLineage,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import {
   buildCoordinatorOrchestratorInstructions,
   buildCoordinatorOrchestratorSections,
@@ -20,6 +23,7 @@ import * as Effect from "effect/Effect";
 import * as McpToolExposure from "../mcp/McpToolExposure.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
@@ -166,6 +170,103 @@ describe("Coordinator Orchestrator", () => {
           forReview: 1,
           done: 0,
         });
+      }).pipe(Effect.provide(layerOrchestratorTest)),
+  );
+
+  it.effect(
+    "preserves concurrent activeProviderThreadId when syncing linked orchestrator tasks",
+    () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const sink = yield* EventSink.EventSinkV2;
+        const threadId = ThreadId.make("thread:coordinator-race");
+        const projectId = ProjectId.make("project:race");
+        const subagentId = NodeId.make("node:subagent-race");
+        const providerThreadId = ProviderThreadId.make("provider-thread:live-1");
+
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("cmd:race-create"),
+          createdBy: "user",
+          creationSource: "web",
+          threadId,
+          projectId,
+          title: "RaceProject",
+          modelSelection: { instanceId, model: "gpt-5.4" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          orchestrator: true,
+          orchestratorWorkerPolicy: { mode: "auto" },
+        });
+        yield* orchestrator.dispatch({
+          type: "thread.orchestrator-task.upsert",
+          commandId: CommandId.make("cmd:race-task"),
+          threadId,
+          taskId: "task:race-1",
+          title: "Build race-free sync",
+          subagentId,
+          status: "in_progress",
+        });
+
+        const now = yield* DateTime.now;
+        yield* sink.write({
+          commandId: CommandId.make("cmd:race-provider-thread"),
+          events: [
+            {
+              id: EventId.make("evt:race-provider-thread"),
+              type: "provider-thread.updated",
+              threadId,
+              driver: ProviderDriverKind.make("codex"),
+              providerInstanceId: instanceId,
+              occurredAt: now,
+              payload: {
+                id: providerThreadId,
+                appThreadId: threadId,
+                ownerNodeId: NodeId.make("node:root-race"),
+                driver: ProviderDriverKind.make("codex"),
+                providerInstanceId: instanceId,
+                providerSessionId: null,
+                nativeThreadRef: {
+                  driver: ProviderDriverKind.make("codex"),
+                  nativeId: "native-live-1",
+                  strength: "strong",
+                },
+                nativeConversationHeadRef: null,
+                status: "active",
+                firstRunOrdinal: 1,
+                lastRunOrdinal: 1,
+                handoffIds: [],
+                forkedFrom: null,
+                createdAt: now,
+                updatedAt: now,
+              },
+            },
+          ],
+          effects: [],
+        });
+        yield* sink.write({
+          commandId: CommandId.make("cmd:race-task-sync"),
+          events: [
+            {
+              id: EventId.make("evt:race-task-sync"),
+              type: "thread.orchestrator-tasks-updated",
+              threadId,
+              occurredAt: now,
+              payload: {
+                kind: "sync_subagent",
+                subagentId,
+                status: "for_review",
+              },
+            },
+          ],
+          effects: [],
+        });
+
+        const updated = yield* orchestrator.getThreadProjection(threadId);
+        assert.strictEqual(updated.thread.activeProviderThreadId, providerThreadId);
+        assert.strictEqual(updated.thread.orchestratorTasks?.[0]?.status, "for_review");
       }).pipe(Effect.provide(layerOrchestratorTest)),
   );
 

@@ -1,4 +1,9 @@
-import type { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  OrchestratorWorkerPolicy,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import type * as Effect from "effect/Effect";
 
 /**
@@ -22,6 +27,8 @@ export interface McpProviderSessionConfig {
   readonly hasPendingWake?: Effect.Effect<boolean>;
   /** True for continuous project orchestrator threads. */
   readonly orchestrator?: boolean;
+  /** Worker model policy for continuous project orchestrator threads. */
+  readonly orchestratorWorkerPolicy?: OrchestratorWorkerPolicy | undefined;
 }
 
 export function withAgentDeviceEnvironment(

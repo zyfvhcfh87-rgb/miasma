@@ -1,6 +1,7 @@
 import type { ProjectThreadAwarenessV2Input } from "@t3tools/shared/agentAwareness";
 import {
   applyOrchestrationV2ThreadVisit,
+  applyOrchestratorTasksUpdate,
   orchestratorTaskCountsFromTasks,
   pendingGuestMessageCount,
 } from "@t3tools/contracts";
@@ -1056,6 +1057,14 @@ export function applyToProjection(
         ...projection,
         thread: applyThreadPullRequestLinkUpdate(projection.thread, event.payload),
       };
+    case "thread.orchestrator-tasks-updated": {
+      const updated = applyOrchestratorTasksUpdate(
+        projection.thread,
+        event.payload,
+        event.occurredAt,
+      );
+      return updated === projection.thread ? projection : { ...base, thread: updated };
+    }
     case "thread.created":
     case "thread.archived":
     case "thread.unarchived":
@@ -2529,6 +2538,22 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               });
               break;
             }
+            case "thread.orchestrator-tasks-updated": {
+              const thread = yield* getThread(event.threadId);
+              const updatedThread = applyOrchestratorTasksUpdate(
+                thread,
+                event.payload,
+                event.occurredAt,
+              );
+              if (updatedThread !== thread) {
+                yield* apply({
+                  ...event,
+                  type: "thread.metadata-updated",
+                  payload: updatedThread,
+                });
+              }
+              break;
+            }
             case "thread.visit-recorded": {
               const thread = yield* getThread(event.threadId);
               yield* apply({
@@ -3412,6 +3437,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             event.type !== "thread.pull-request-synced" &&
             event.type !== "thread.issue-synced" &&
             event.type !== "thread.pull-request-link-updated" &&
+            event.type !== "thread.orchestrator-tasks-updated" &&
             event.type !== "thread.runtime-mode-updated" &&
             event.type !== "thread.interaction-mode-updated" &&
             event.type !== "thread.model-selection-updated" &&
@@ -9586,7 +9612,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         readonly parent_thread_id: string | null;
         readonly root_thread_id: string;
         readonly side_chat: number | null;
-        readonly orchestrator: number | null;
         readonly settled_override: string | null;
         readonly settled_at: string | null;
         readonly pinned_at: string | null;
@@ -9602,7 +9627,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           ${indexedField("$.lineage.parentThreadId")} AS parent_thread_id,
           ${indexedField("$.lineage.rootThreadId")} AS root_thread_id,
           ${indexedField("$.lineage.sideChat")} AS side_chat,
-          ${indexedField("$.lineage.orchestrator")} AS orchestrator,
           ${indexedField("$.settledOverride")} AS settled_override,
           ${indexedField("$.settledAt")} AS settled_at,
           ${indexedField("$.pinnedAt")} AS pinned_at,

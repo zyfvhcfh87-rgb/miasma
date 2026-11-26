@@ -4,7 +4,7 @@ export interface CoordinatorOrchestratorInstructionContext {
   readonly workerPolicy?: OrchestratorWorkerPolicy | undefined;
 }
 
-function coordinatorOrchestratorWorkerPolicyKey(
+export function coordinatorOrchestratorWorkerPolicyKey(
   context: CoordinatorOrchestratorInstructionContext | undefined,
 ): string | undefined {
   if (context === undefined) return undefined;
@@ -17,7 +17,9 @@ function coordinatorOrchestratorWorkerPolicyKey(
   return `manual:${policy.modelSelection.instanceId}:${policy.modelSelection.model}:${options}`;
 }
 
-function workerPolicyInstruction(policy: OrchestratorWorkerPolicy | undefined): string {
+export function coordinatorWorkerPolicyInstruction(
+  policy: OrchestratorWorkerPolicy | undefined,
+): string {
   if (policy?.mode === "manual") {
     return `- Worker model mode is **Manual**: every delegated sub-agent uses \`${policy.modelSelection.instanceId}\` / \`${policy.modelSelection.model}\`. Omit \`target\` on \`delegate_task\` (Miasma automatically routes new workers to this model).`;
   }
@@ -35,7 +37,7 @@ You are this project's continuous **Orchestrator**. Your role is to plan, resear
 
 - **Never code directly:** Do not edit repository files, write implementation code, or run build/commit/PR commands yourself. Read files or git state only when needed to plan or review; delegate all edits, fixes, tests, and git operations via \`delegate_task\`.
 - **Always use Miasma delegation:** Always delegate with \`delegate_task\`. Never use provider-native sub-agent tools (\`Agent\`, \`spawn_agent\`, etc.) so every worker appears on the Tasks board, can run on any provider/model, and stays reachable via \`t3_thread_read\` and \`t3_thread_send\`.
-${workerPolicyInstruction(context.workerPolicy)}`,
+${coordinatorWorkerPolicyInstruction(context.workerPolicy)}`,
     `### Delegation, isolation, and review discipline
 
 - **Workspace isolation:** Use \`isolation: "shared"\` for sequential single tasks in the main checkout. Use \`isolation: "worktree"\` whenever running tasks in parallel or preparing separate branches/PRs.

@@ -244,6 +244,55 @@ export const OrchestrationV2OrchestratorTaskCounts = Schema.Struct({
 export type OrchestrationV2OrchestratorTaskCounts =
   typeof OrchestrationV2OrchestratorTaskCounts.Type;
 
+export const OrchestrationV2OrchestratorTasksUpdatedPayload = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("replace"),
+    orchestratorTasks: Schema.Array(OrchestrationV2OrchestratorTask),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("sync_subagent"),
+    subagentId: NodeId,
+    status: Schema.Literals(["for_review", "needs_attention", "cancelled"]),
+  }),
+]);
+export type OrchestrationV2OrchestratorTasksUpdatedPayload =
+  typeof OrchestrationV2OrchestratorTasksUpdatedPayload.Type;
+
+export function applyOrchestratorTasksUpdate(
+  thread: OrchestrationV2AppThread,
+  payload: OrchestrationV2OrchestratorTasksUpdatedPayload,
+  occurredAt: DateTime.Utc,
+): OrchestrationV2AppThread {
+  if (payload.kind === "replace") {
+    return {
+      ...thread,
+      orchestratorTasks: payload.orchestratorTasks,
+      updatedAt: occurredAt,
+    };
+  }
+  const existing = thread.orchestratorTasks;
+  if (existing === undefined || existing.length === 0) return thread;
+  const nowIso = DateTime.formatIso(occurredAt);
+  let changed = false;
+  const orchestratorTasks = existing.map((entry) => {
+    if (entry.subagentId !== payload.subagentId) return entry;
+    if (entry.status !== "in_progress" && entry.status !== "planned") return entry;
+    changed = true;
+    return {
+      ...entry,
+      status: payload.status,
+      updatedAt: nowIso,
+      completedAt: payload.status === "cancelled" ? (entry.completedAt ?? nowIso) : null,
+    };
+  });
+  if (!changed) return thread;
+  return {
+    ...thread,
+    orchestratorTasks,
+    updatedAt: occurredAt,
+  };
+}
+
 export function orchestratorTaskPrefixFromTitle(title: string): string {
   const letters = title.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
   if (letters.length >= 3) return letters.slice(0, 3);
@@ -2295,6 +2344,11 @@ export const OrchestrationV2DomainEvent = Schema.Union([
   }),
   Schema.Struct({
     ...OrchestrationV2EventBase.fields,
+    type: Schema.Literal("thread.orchestrator-tasks-updated"),
+    payload: OrchestrationV2OrchestratorTasksUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2EventBase.fields,
     type: Schema.Literal("thread.visit-recorded"),
     payload: OrchestrationV2ThreadVisit,
   }),
@@ -3254,6 +3308,11 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
     ...OrchestrationV2JsonEventBaseFields,
     type: Schema.Literal("thread.pull-request-link-updated"),
     payload: ThreadPullRequestLink,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2JsonEventBaseFields,
+    type: Schema.Literal("thread.orchestrator-tasks-updated"),
+    payload: OrchestrationV2OrchestratorTasksUpdatedPayload,
   }),
   Schema.Struct({
     ...OrchestrationV2JsonEventBaseFields,

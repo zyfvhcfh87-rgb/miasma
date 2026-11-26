@@ -1,6 +1,7 @@
 import {
   CommandId,
   type EnvironmentId,
+  type ModelSelection,
   NodeId,
   OrchestratorMcpCapabilitiesInput,
   OrchestratorMcpCapabilitiesResult,
@@ -93,6 +94,10 @@ export class RemoteDelegation extends Context.Service<
       input: OrchestratorMcpDelegateTaskInput & {
         readonly target: NonNullable<OrchestratorMcpDelegateTaskInput["target"]> & {
           readonly environmentId: EnvironmentId;
+        };
+        readonly manualWorker?: {
+          readonly modelSelection: ModelSelection;
+          readonly driverKind?: ProviderDriverKind | undefined;
         };
       },
     ) => Effect.Effect<{ readonly taskId: NodeId }, OrchestratorMcpFailure>;
@@ -262,6 +267,70 @@ const make = Effect.gen(function* () {
     return chosen.providerInstanceId;
   });
 
+  const resolveManualRemoteTarget = Effect.fn("RemoteDelegation.resolveManualRemoteTarget")(
+    function* (
+      scope: ThreadScope,
+      environmentId: EnvironmentId,
+      manualWorker: {
+        readonly modelSelection: ModelSelection;
+        readonly driverKind?: ProviderDriverKind | undefined;
+      },
+      requestedInstanceId: ProviderInstanceId | undefined,
+    ) {
+      const { providers } = yield* forwarding.call(
+        scope,
+        RemoteCapabilitiesTool,
+        environmentId,
+        {},
+      );
+      const pinnedModel = manualWorker.modelSelection.model;
+      const matchesDriver = (provider: (typeof providers)[number]) =>
+        manualWorker.driverKind === undefined || provider.driverKind === manualWorker.driverKind;
+      const eligible = providers.filter(
+        (provider) =>
+          provider.canRunChildTask &&
+          matchesDriver(provider) &&
+          provider.models.some((model) => model.id === pinnedModel),
+      );
+      const chosen =
+        (requestedInstanceId === undefined
+          ? undefined
+          : eligible.find((provider) => provider.providerInstanceId === requestedInstanceId)) ??
+        eligible.find(
+          (provider) => provider.providerInstanceId === manualWorker.modelSelection.instanceId,
+        ) ??
+        eligible[0];
+      if (chosen !== undefined) {
+        return {
+          instanceId: chosen.providerInstanceId,
+          model: pinnedModel,
+          options: manualWorker.modelSelection.options,
+        };
+      }
+      const truncatedMatch = providers.find(
+        (provider) =>
+          provider.canRunChildTask &&
+          matchesDriver(provider) &&
+          (provider.omittedModels ?? 0) > 0 &&
+          (provider.providerInstanceId === requestedInstanceId ||
+            provider.providerInstanceId === manualWorker.modelSelection.instanceId),
+      );
+      if (truncatedMatch !== undefined) {
+        return {
+          instanceId: truncatedMatch.providerInstanceId,
+          model: pinnedModel,
+          options: manualWorker.modelSelection.options,
+        };
+      }
+      const driverNote =
+        manualWorker.driverKind === undefined ? "" : ` (driver ${manualWorker.driverKind})`;
+      return yield* new OrchestratorMcpFailure({
+        code: "provider_unavailable",
+        message: `Manual worker model ${pinnedModel}${driverNote} is not available on the linked environment. Switch the orchestrator worker policy to Auto or pick a model offered there.`,
+      });
+    },
+  );
+
   const delegate: RemoteDelegation["Service"]["delegate"] = Effect.fn("RemoteDelegation.delegate")(
     function* (scope, input) {
       const parent = yield* threads.getThreadRecords(scope.thread.threadId, ["runs"]).pipe(
@@ -299,17 +368,32 @@ const make = Effect.gen(function* () {
       }
       // The provider and model inherit as they do for a task here. Another
       // provider there has no model to inherit, so the caller names one.
+      // When a manual worker policy is active, resolve its pinned model against the peer's providers
+      // and never inherit or forward caller driverKind/options from another model.
       const inherited = parent.thread.modelSelection;
+      const manualResolved =
+        input.manualWorker === undefined
+          ? undefined
+          : yield* resolveManualRemoteTarget(
+              scope,
+              target.environmentId,
+              input.manualWorker,
+              target.providerInstanceId,
+            );
       const instanceId =
-        target.driverKind === undefined
-          ? (target.providerInstanceId ?? inherited.instanceId)
-          : yield* resolveRemoteInstance(scope, target.environmentId, {
-              driverKind: target.driverKind,
-              providerInstanceId: target.providerInstanceId,
-              inheritedInstanceId: inherited.instanceId,
-            });
+        manualResolved !== undefined
+          ? manualResolved.instanceId
+          : target.driverKind === undefined
+            ? (target.providerInstanceId ?? inherited.instanceId)
+            : yield* resolveRemoteInstance(scope, target.environmentId, {
+                driverKind: target.driverKind,
+                providerInstanceId: target.providerInstanceId,
+                inheritedInstanceId: inherited.instanceId,
+              });
       const model =
-        target.model ?? (instanceId === inherited.instanceId ? inherited.model : undefined);
+        manualResolved !== undefined
+          ? manualResolved.model
+          : (target.model ?? (instanceId === inherited.instanceId ? inherited.model : undefined));
       if (model === undefined) {
         return yield* new OrchestratorMcpFailure({
           code: "target_required",
@@ -317,10 +401,12 @@ const make = Effect.gen(function* () {
         });
       }
       const options =
-        target.options ??
-        (instanceId === inherited.instanceId && model === inherited.model
-          ? inherited.options
-          : undefined);
+        manualResolved !== undefined
+          ? manualResolved.options
+          : (target.options ??
+            (instanceId === inherited.instanceId && model === inherited.model
+              ? inherited.options
+              : undefined));
       // Modes asked for are checked against this thread. Omitted ones are left
       // to the other side, which inherits this thread's modes capped by the
       // link's access, so a narrower link still takes the task.

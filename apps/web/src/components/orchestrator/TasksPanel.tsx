@@ -456,7 +456,18 @@ export function TasksPanel({ threadRef }: { threadRef: ScopedThreadRef }) {
   };
 
   const handleCancelSubagent = (item: OrchestratorTaskBoardItem) => {
-    if (!canOperate || item.childThreadId === null) return;
+    if (!canOperate) return;
+    if (item.subagent !== null) {
+      void interruptTurn({
+        environmentId: threadRef.environmentId,
+        input: {
+          threadId: threadRef.threadId,
+          subagentId: item.subagent.id,
+        },
+      });
+      return;
+    }
+    if (item.childThreadId === null) return;
     void interruptTurn({
       environmentId: threadRef.environmentId,
       input: {

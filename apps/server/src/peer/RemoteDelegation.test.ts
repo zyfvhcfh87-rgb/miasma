@@ -742,7 +742,13 @@ const makeLaptop = (
       Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
       Layer.provide(NodeCrypto.layer),
       Layer.provideMerge(layerThreads),
-      Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
+      Layer.provide(
+        Layer.mock(ProviderRegistry.ProviderRegistry)({
+          getProviders: Effect.succeed([
+            { ...boxClaude, instanceId: ProviderInstanceId.make("claude-work") },
+          ]),
+        }),
+      ),
       Layer.provide(Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({})),
       Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
       Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
@@ -792,6 +798,7 @@ const parentScope: McpInvocationContext.McpInvocationScope = {
 const seedParent = (
   laptopEnv: Effect.Success<ReturnType<typeof makeLaptop>>,
   parentModelSelection: ModelSelection = modelSelection,
+  options?: { readonly orchestrator?: boolean },
 ) =>
   Effect.gen(function* () {
     const now = yield* DateTime.now;
@@ -809,6 +816,7 @@ const seedParent = (
       interactionMode: "default",
       branch: null,
       worktreePath: null,
+      ...(options?.orchestrator === true ? { orchestrator: true } : {}),
     });
     yield* laptopEnv.sink.write({
       commandId: CommandId.make("command:seed:laptop-parent"),
@@ -1331,6 +1339,74 @@ it.effect("a task naming another driver there never runs its model on the parent
       );
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect(
+  "a manual worker policy resolves the peer's provider by pinned model, ignores conflicting driverKind/options, and fails if unavailable",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const thread = yield* makeBoxThread;
+        const b = yield* serveBox(thread);
+        const offers = yield* SubscriptionRef.make<
+          ReadonlyArray<ProviderContinuationRequests.ProviderContinuationRequest>
+        >([]);
+        const database = yield* SqlitePersistence.layerMemory.pipe(Layer.build);
+        const a = yield* makeLaptop(database, offers);
+        yield* linkTo(a.links, b, "full-access");
+        yield* seedParent(a, modelSelection, { orchestrator: true });
+
+        // Pin coordinator manual worker to a local instanceId ("claude-work") that does not exist
+        // on the box (which offers "claude-box") and with no options.
+        yield* a.orchestrator.dispatch({
+          type: "thread.orchestrator-worker-policy.set",
+          commandId: CommandId.make("command:manual-worker:claude-work"),
+          threadId: parentThreadId,
+          workerPolicy: {
+            mode: "manual",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("claude-work"),
+              model: "claude-sonnet-4-6",
+            },
+          },
+        });
+
+        const result = yield* a.call("delegate_task", {
+          task: "Run tests on the box under manual worker policy.",
+          target: {
+            environmentId: box.environmentId,
+            driverKind: "codex",
+            options: [{ id: "reasoningEffort", value: "low" }],
+          },
+          clientRequestId: "manual-policy-resolved",
+        });
+        expect(result.isError, JSON.stringify(result.content)).toBe(false);
+        expect((yield* Ref.get(thread.launchedWith))?.modelSelection).toEqual({
+          instanceId: boxClaude.instanceId,
+          model: "claude-sonnet-4-6",
+        });
+
+        // When the peer does not offer the pinned manual model, refuse cleanly without substituting.
+        yield* a.orchestrator.dispatch({
+          type: "thread.orchestrator-worker-policy.set",
+          commandId: CommandId.make("command:manual-worker:missing"),
+          threadId: parentThreadId,
+          workerPolicy: {
+            mode: "manual",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("claude-work"),
+              model: "claude-nonexistent-9",
+            },
+          },
+        });
+        const unavailable = yield* a.call("delegate_task", {
+          task: "Run tests with an unavailable pinned model.",
+          target: { environmentId: box.environmentId },
+          clientRequestId: "manual-policy-unavailable",
+        });
+        expect(unavailable.isError).toBe(true);
+      }),
+    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
 it.effect("refuses worktree isolation for a task there before launching anything", () =>

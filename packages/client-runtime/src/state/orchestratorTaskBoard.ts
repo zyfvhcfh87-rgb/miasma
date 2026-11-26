@@ -64,7 +64,9 @@ function liveStatusForTask(input: {
   if (subagent !== null) {
     if (isLiveSubagentStatus(subagent.status)) return "in_progress";
     if (subagent.status === "failed") {
-      return storedStatus === "done" || storedStatus === "cancelled"
+      return storedStatus === "done" ||
+        storedStatus === "cancelled" ||
+        storedStatus === "for_review"
         ? storedStatus
         : "needs_attention";
     }

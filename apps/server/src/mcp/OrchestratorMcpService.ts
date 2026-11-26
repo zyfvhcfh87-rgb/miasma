@@ -2943,15 +2943,40 @@ const make = Effect.gen(function* () {
         yield* requireCapability(callerScope);
         const scope = yield* requireThreadScope(callerScope, "delegate_task");
         const parent = yield* loadCallerRecords(scope.thread.threadId, ["runs"]);
+        const manualWorker = manualWorkerSelection(parent.thread);
+        const manualDriver =
+          manualWorker === undefined
+            ? undefined
+            : (yield* loadProviders).find(
+                (provider) => provider.instanceId === manualWorker.instanceId,
+              )?.driver;
         // The task's child runs as an ordinary thread there; this thread keeps the task.
-        // A manual worker policy applies there too, so the linked worker runs the selected model.
+        // A manual worker policy resolves its pinned model against the peer's providers.
         const { taskId } = yield* remoteDelegation.delegate(scope, {
           ...input,
-          target: {
-            ...input.target,
-            environmentId,
-            ...manualWorkerTargetFields(manualWorkerSelection(parent.thread)),
-          },
+          target:
+            manualWorker !== undefined
+              ? {
+                  environmentId,
+                  ...(input.target.projectId === undefined
+                    ? {}
+                    : { projectId: input.target.projectId }),
+                  ...(input.target.providerInstanceId === undefined
+                    ? {}
+                    : { providerInstanceId: input.target.providerInstanceId }),
+                }
+              : {
+                  ...input.target,
+                  environmentId,
+                },
+          ...(manualWorker !== undefined
+            ? {
+                manualWorker: {
+                  modelSelection: manualWorker,
+                  ...(manualDriver === undefined ? {} : { driverKind: manualDriver }),
+                },
+              }
+            : {}),
         });
         return yield* input.mode === "wait"
           ? awaitTask(scope, taskId, taskId, input.timeoutMs)

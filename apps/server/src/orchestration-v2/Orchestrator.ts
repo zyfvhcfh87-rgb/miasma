@@ -5741,6 +5741,26 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
       return;
     }
+    if (
+      command.type === "thread.orchestrator-task.upsert" ||
+      command.type === "thread.orchestrator-task.set-status"
+    ) {
+      if (updatedThread === thread) return;
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.orchestrator-tasks-updated",
+        threadId: command.threadId,
+        providerInstanceId: updatedThread.providerInstanceId,
+        occurredAt: now,
+        payload: {
+          kind: "replace",
+          orchestratorTasks: updatedThread.orchestratorTasks ?? [],
+        },
+      });
+      return;
+    }
     const eventType = (() => {
       switch (command.type) {
         case "thread.archive":
@@ -5772,8 +5792,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         case "thread.metadata.update":
         case "thread.title.regeneration.complete":
         case "thread.orchestrator-worker-policy.set":
-        case "thread.orchestrator-task.upsert":
-        case "thread.orchestrator-task.set-status":
           return "thread.metadata-updated" as const;
         case "thread.pull-request.link":
         case "thread.pull-request.unlink":
@@ -10910,37 +10928,30 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       payload: plan.task,
     });
     const existingOrchestratorTasks = parentProjection.thread.orchestratorTasks;
-    if (existingOrchestratorTasks !== undefined && existingOrchestratorTasks.length > 0) {
+    if (
+      existingOrchestratorTasks !== undefined &&
+      existingOrchestratorTasks.some(
+        (entry) =>
+          entry.subagentId === task.id &&
+          (entry.status === "in_progress" || entry.status === "planned"),
+      )
+    ) {
       const nextTaskStatus =
         command.status === "completed"
           ? ("for_review" as const)
           : command.status === "failed"
             ? ("needs_attention" as const)
             : ("cancelled" as const);
-      const nowIso = DateTime.formatIso(now);
-      let tasksChanged = false;
-      const updatedOrchestratorTasks = existingOrchestratorTasks.map((entry) => {
-        if (entry.subagentId !== task.id) return entry;
-        if (entry.status !== "in_progress" && entry.status !== "planned") return entry;
-        tasksChanged = true;
-        return {
-          ...entry,
+      yield* emitEvent({
+        type: "thread.orchestrator-tasks-updated",
+        threadId: command.parentThreadId,
+        occurredAt: now,
+        payload: {
+          kind: "sync_subagent",
+          subagentId: task.id,
           status: nextTaskStatus,
-          updatedAt: nowIso,
-        };
+        },
       });
-      if (tasksChanged) {
-        yield* emitEvent({
-          type: "thread.metadata-updated",
-          threadId: command.parentThreadId,
-          occurredAt: now,
-          payload: {
-            ...parentProjection.thread,
-            orchestratorTasks: updatedOrchestratorTasks,
-            updatedAt: now,
-          },
-        });
-      }
     }
     for (const event of delegatedCompletionPlanEvents(
       command.parentThreadId,
@@ -15692,6 +15703,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             (options.task.id === forkedFrom.nodeId && transfer.sourcePoint.runId === undefined)),
       );
       if (existingResultTransfer !== undefined) {
+        const retryBoardEvents = yield* linkedOrchestratorTaskEvents(
+          parentThreadId,
+          task.id,
+          terminalStatus,
+          yield* DateTime.now,
+        );
+        if (retryBoardEvents.length > 0) {
+          yield* writeSystemEvents(retryBoardEvents, [], { updateDelegatedCompletionOnly: true });
+        }
         return;
       }
 
@@ -15829,6 +15849,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
   // Moves persisted orchestrator board rows linked to a finished app-owned subagent out of
   // in_progress/planned so shell counts and `t3_task_board` match the live subagent state.
+  // Emits a targeted patch event so concurrent parent writes (such as activeProviderThreadId)
+  // are never clobbered by a stale thread snapshot.
   const linkedOrchestratorTaskEvents = Effect.fn("Orchestrator.linkedOrchestratorTaskEvents")(
     function* (
       parentThreadId: ThreadId,
@@ -15836,11 +15858,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       status: OrchestrationV2Subagent["status"],
       now: DateTime.Utc,
     ) {
-      const parentThread = yield* projectionStore
-        .getThread(parentThreadId)
-        .pipe(Effect.orElseSucceed(() => undefined));
-      const existing = parentThread?.orchestratorTasks;
-      if (parentThread === undefined || existing === undefined || existing.length === 0) {
+      const parentThread = yield* projectionStore.getThread(parentThreadId);
+      const existing = parentThread.orchestratorTasks;
+      if (
+        existing === undefined ||
+        !existing.some(
+          (entry) =>
+            entry.subagentId === subagentId &&
+            (entry.status === "in_progress" || entry.status === "planned"),
+        )
+      ) {
         return [] as ReadonlyArray<Omit<OrchestrationV2DomainEvent, "id">>;
       }
       const nextStatus =
@@ -15849,26 +15876,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           : status === "failed"
             ? ("needs_attention" as const)
             : ("cancelled" as const);
-      const nowIso = DateTime.formatIso(now);
-      let changed = false;
-      const orchestratorTasks = existing.map((entry) => {
-        if (entry.subagentId !== subagentId) return entry;
-        if (entry.status !== "in_progress" && entry.status !== "planned") return entry;
-        changed = true;
-        return {
-          ...entry,
-          status: nextStatus,
-          updatedAt: nowIso,
-          completedAt: nextStatus === "cancelled" ? (entry.completedAt ?? nowIso) : null,
-        };
-      });
-      if (!changed) return [] as ReadonlyArray<Omit<OrchestrationV2DomainEvent, "id">>;
       return [
         {
-          type: "thread.metadata-updated" as const,
+          type: "thread.orchestrator-tasks-updated" as const,
           threadId: parentThreadId,
           occurredAt: now,
-          payload: { ...parentThread, orchestratorTasks, updatedAt: now },
+          payload: {
+            kind: "sync_subagent" as const,
+            subagentId,
+            status: nextStatus,
+          },
         },
       ] as ReadonlyArray<Omit<OrchestrationV2DomainEvent, "id">>;
     },

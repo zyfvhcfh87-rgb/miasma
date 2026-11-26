@@ -1,3 +1,4 @@
+import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
@@ -11,10 +12,12 @@ import {
 import {
   AuthOrchestrationOperateScope,
   DEFAULT_PROVIDER_INTERACTION_MODE,
-  DEFAULT_RUNTIME_MODE,
+  DEFAULT_SERVER_SETTINGS,
+  type EnvironmentId,
   type ModelSelection,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { T, useGT } from "gt-react";
 import {
   ArchiveIcon,
@@ -48,6 +51,7 @@ export function SidebarOrchestratorTab(props: {
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly orchestratorThreads: ReadonlyArray<EnvironmentThreadShell>;
   readonly activeThreadKey: string | null;
+  readonly serverConfigs: ReadonlyMap<EnvironmentId, EnvironmentServerConfig>;
   readonly defaultModelSelectionByEnvironment: ReadonlyMap<string, ModelSelection>;
   readonly onSelectThread: (threadRef: ScopedThreadRef) => void;
 }) {
@@ -55,6 +59,7 @@ export function SidebarOrchestratorTab(props: {
     projects,
     orchestratorThreads,
     activeThreadKey,
+    serverConfigs,
     defaultModelSelectionByEnvironment,
     onSelectThread,
   } = props;
@@ -63,20 +68,17 @@ export function SidebarOrchestratorTab(props: {
   const archiveThread = useAtomCommand(threadEnvironment.archive, { reportFailure: false });
   const [creatingProjectKey, setCreatingProjectKey] = useState<string | null>(null);
 
-  const activeByProjectKey = new Map<string, EnvironmentThreadShell>();
+  const activeCountByProjectKey = new Map<string, number>();
   for (const thread of orchestratorThreads) {
     const key = `${thread.environmentId}:${thread.projectId}`;
-    const existing = activeByProjectKey.get(key);
-    if (!existing || thread.updatedAt > existing.updatedAt) {
-      activeByProjectKey.set(key, thread);
-    }
+    activeCountByProjectKey.set(key, (activeCountByProjectKey.get(key) ?? 0) + 1);
   }
 
-  const projectByKey = new Map(
+  const projectByKey = new Map<string, EnvironmentProject>(
     projects.map((project) => [`${project.environmentId}:${project.id}`, project] as const),
   );
 
-  const sortedOrchestrators = [...activeByProjectKey.values()].toSorted((left, right) =>
+  const sortedOrchestrators = [...orchestratorThreads].toSorted((left, right) =>
     right.updatedAt.localeCompare(left.updatedAt),
   );
 
@@ -84,7 +86,7 @@ export function SidebarOrchestratorTab(props: {
     (project) =>
       project.archivedAt == null &&
       !project.isScratch &&
-      !activeByProjectKey.has(`${project.environmentId}:${project.id}`),
+      !activeCountByProjectKey.has(`${project.environmentId}:${project.id}`),
   );
 
   const launchOrchestratorForProject = async (project: EnvironmentProject) => {
@@ -112,6 +114,10 @@ export function SidebarOrchestratorTab(props: {
     }
     setCreatingProjectKey(projectKey);
     const threadId = newThreadId();
+    const serverSettings =
+      serverConfigs.get(project.environmentId)?.settings ?? DEFAULT_SERVER_SETTINGS;
+    const runtimeMode = resolveProjectSettings(serverSettings, project.id, project).settings
+      .defaultRuntimeMode;
     const result = await createThread({
       environmentId: project.environmentId,
       input: {
@@ -119,7 +125,7 @@ export function SidebarOrchestratorTab(props: {
         projectId: project.id,
         title: project.title,
         modelSelection,
-        runtimeMode: DEFAULT_RUNTIME_MODE,
+        runtimeMode,
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         branch: null,
         worktreePath: null,
@@ -261,7 +267,18 @@ export function SidebarOrchestratorTab(props: {
             const ref = scopeThreadRef(thread.environmentId, thread.id);
             const key = scopedThreadKey(ref);
             const isSelected = activeThreadKey === key;
-            const project = projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null;
+            const projectKey = `${thread.environmentId}:${thread.projectId}`;
+            const project = projectByKey.get(projectKey) ?? null;
+            const projectTitle = project?.title ?? thread.title;
+            const hasMultipleForProject = (activeCountByProjectKey.get(projectKey) ?? 0) > 1;
+            const disambiguator = hasMultipleForProject
+              ? thread.title && thread.title !== projectTitle
+                ? thread.title
+                : new Date(thread.updatedAt).toLocaleDateString(undefined, {
+                    month: "short",
+                    day: "numeric",
+                  })
+              : null;
             const counts = thread.orchestratorTaskCounts;
             const isWorking =
               threadRuntimeIsActive(thread.runtime) || (counts?.inProgress ?? 0) > 0;
@@ -294,7 +311,14 @@ export function SidebarOrchestratorTab(props: {
                   ) : (
                     <BotIcon className="size-4 shrink-0 text-sidebar-muted-foreground" />
                   )}
-                  <span className="min-w-0 flex-1 truncate">{project?.title ?? thread.title}</span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {projectTitle}
+                    {disambiguator ? (
+                      <span className="ml-1.5 text-2xs font-normal text-sidebar-muted-foreground">
+                        {disambiguator}
+                      </span>
+                    ) : null}
+                  </span>
                   {isWorking ? (
                     <Spinner className="size-3 shrink-0" />
                   ) : needsAttention ? (

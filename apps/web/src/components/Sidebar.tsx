@@ -3426,6 +3426,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               projects={projects}
               orchestratorThreads={orchestratorThreads}
               activeThreadKey={routeRowThreadKey}
+              serverConfigs={serverConfigs}
               defaultModelSelectionByEnvironment={defaultModelSelectionByEnvironment}
               onSelectThread={(ref) => {
                 if (isMobile) setOpenMobile(false);

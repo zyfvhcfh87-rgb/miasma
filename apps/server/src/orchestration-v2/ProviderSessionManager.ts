@@ -643,10 +643,15 @@ export const layerWithOptions = (
                   Effect.map((thread) => ({
                     subagent: thread.lineage.relationshipToParent === "subagent",
                     orchestrator: thread.lineage.orchestrator === true,
+                    orchestratorWorkerPolicy: thread.orchestratorWorkerPolicy,
                   })),
-                  Effect.orElseSucceed(() => ({ subagent: false, orchestrator: false })),
+                  Effect.orElseSucceed(() => ({
+                    subagent: false,
+                    orchestrator: false,
+                    orchestratorWorkerPolicy: undefined,
+                  })),
                 );
-                const { subagent, orchestrator } = threadFlags;
+                const { subagent, orchestrator, orchestratorWorkerPolicy } = threadFlags;
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
                   // Reserve before async validation so release cannot revoke between validation and reservation.
@@ -675,6 +680,12 @@ export const layerWithOptions = (
                     (resolved.thread.subagent === true) === subagent &&
                     (resolved.thread.orchestrator === true) === orchestrator
                   ) {
+                    if (existing.orchestratorWorkerPolicy !== orchestratorWorkerPolicy) {
+                      yield* mcpSessions.set({
+                        ...existing,
+                        orchestratorWorkerPolicy,
+                      });
+                    }
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
                   }
                   dropMcpCredentialReservation(threadId, existing.providerSessionId);
@@ -690,6 +701,7 @@ export const layerWithOptions = (
                 });
                 yield* mcpSessions.set({
                   ...credential.config,
+                  orchestratorWorkerPolicy,
                   hasPendingWake: projectionStore
                     .getThreadRecords(threadId, ["runs", "subagents"])
                     .pipe(
