@@ -7,7 +7,15 @@ import * as NodeVM from "node:vm";
 import { assert, describe, it } from "@effect/vitest";
 import { PULL_REQUEST_LINKING_INSTRUCTIONS } from "@t3tools/provider-core/server/runtimeInstructions";
 
-import { PI_T3_MCP_EXTENSION_SOURCE, PI_T3_SERVICE_TIER_COMMAND } from "./mcpExtensionSource.ts";
+import {
+  PI_T3_MCP_EXTENSION_SOURCE,
+  PI_T3_ORCHESTRATOR_POLICY_COMMAND,
+  PI_T3_SERVICE_TIER_COMMAND,
+  T3_MCP_BEARER_ENV,
+  T3_MCP_URL_ENV,
+  T3_PI_ORCHESTRATOR_ROLE_ENV,
+  T3_PI_ORCHESTRATOR_WORKER_POLICY_ENV,
+} from "./mcpExtensionSource.ts";
 import { loadMcpBridge } from "./mcpBridge.testkit.ts";
 
 type RequestHook = (
@@ -749,5 +757,57 @@ describe("Pi skill references", () => {
     } finally {
       await NodeFSP.rm(directory, { recursive: true });
     }
+  });
+});
+
+describe("Pi orchestrator worker policy instructions", () => {
+  it("loads manual policy from env and updates dynamically via command", async () => {
+    const handlers = new Map<string, (...args: ReadonlyArray<unknown>) => unknown>();
+    const commands = new Map<string, CommandHandler>();
+    const source = NodeModule.stripTypeScriptTypes(
+      PI_T3_MCP_EXTENSION_SOURCE.replace(/^import .*;$/gm, "").replace(
+        "export default async function",
+        "async function",
+      ),
+    );
+    await NodeVM.runInNewContext(`${source}\nt3McpExtension(pi)`, {
+      process: {
+        env: {
+          [T3_MCP_URL_ENV]: "http://127.0.0.1:1/mcp",
+          [T3_MCP_BEARER_ENV]: "test-token",
+          [T3_PI_ORCHESTRATOR_ROLE_ENV]: "1",
+          [T3_PI_ORCHESTRATOR_WORKER_POLICY_ENV]: JSON.stringify({
+            mode: "manual",
+            instanceId: "claude-work",
+            model: "claude-sonnet-4-6",
+          }),
+        },
+      },
+      pi: {
+        on: (name: string, handler: (...args: ReadonlyArray<unknown>) => unknown) =>
+          handlers.set(name, handler),
+        registerCommand: (name: string, options: { handler: CommandHandler }) =>
+          commands.set(name, options.handler),
+        getActiveTools: () => [],
+        setActiveTools: () => {},
+      },
+    });
+    const beforeAgentStart = handlers.get("before_agent_start");
+    const setPolicy = commands.get(PI_T3_ORCHESTRATOR_POLICY_COMMAND);
+    assert.isDefined(beforeAgentStart);
+    assert.isDefined(setPolicy);
+
+    const ctx = { isProjectTrusted: () => true };
+    const manualResult = beforeAgentStart!({ systemPrompt: "BASE" }, ctx) as {
+      systemPrompt: string;
+    };
+    assert.include(manualResult.systemPrompt, "Worker model mode is **Manual**");
+    assert.include(manualResult.systemPrompt, "`claude-work` / `claude-sonnet-4-6`");
+
+    await setPolicy!("");
+    const autoResult = beforeAgentStart!({ systemPrompt: "BASE" }, ctx) as {
+      systemPrompt: string;
+    };
+    assert.include(autoResult.systemPrompt, "Worker model mode is **Auto**");
   });
 });

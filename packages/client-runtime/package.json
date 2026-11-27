@@ -467,6 +467,10 @@
       "types": "./src/state/threadSubagents.ts",
       "default": "./src/state/threadSubagents.ts"
     },
+    "./state/orchestrator-task-board": {
+      "types": "./src/state/orchestratorTaskBoard.ts",
+      "default": "./src/state/orchestratorTaskBoard.ts"
+    },
     "./state/thread-undo": {
       "types": "./src/state/threadUndo.ts",
       "default": "./src/state/threadUndo.ts"

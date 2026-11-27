@@ -34,6 +34,8 @@ export interface McpThreadCaller {
   readonly providerInstanceId: ProviderInstanceId;
   /** A delegated child task; its parent owns the work it hands back. */
   readonly subagent?: boolean;
+  /** A continuous project orchestrator thread. */
+  readonly orchestrator?: boolean;
 }
 
 export interface McpClientCaller {
@@ -255,6 +257,13 @@ export const hiddenWithoutForge = (): boolean => {
   const fiber = Fiber.getCurrent();
   const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
   return scope?.forge !== false;
+};
+
+/** `McpSchema.EnabledWhen` for orchestrator-only tools such as `t3_task_board`. */
+export const hiddenUnlessOrchestrator = (): boolean => {
+  const fiber = Fiber.getCurrent();
+  const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
+  return scope?.thread?.orchestrator === true;
 };
 
 export type McpCapabilityError<C extends McpCapability> = C extends "preview"

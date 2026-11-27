@@ -1,4 +1,63 @@
-import type { ProviderInteractionMode } from "@t3tools/contracts";
+import type { OrchestratorWorkerPolicy, ProviderInteractionMode } from "@t3tools/contracts";
+
+export interface CoordinatorOrchestratorInstructionContext {
+  readonly workerPolicy?: OrchestratorWorkerPolicy | undefined;
+}
+
+export function coordinatorOrchestratorWorkerPolicyKey(
+  context: CoordinatorOrchestratorInstructionContext | undefined,
+): string | undefined {
+  if (context === undefined) return undefined;
+  const policy = context.workerPolicy;
+  if (policy === undefined || policy.mode === "auto") return "auto";
+  const options = (policy.modelSelection.options ?? [])
+    .map((option) => `${option.id}=${String(option.value)}`)
+    .toSorted()
+    .join(",");
+  return `manual:${policy.modelSelection.instanceId}:${policy.modelSelection.model}:${options}`;
+}
+
+export function coordinatorWorkerPolicyInstruction(
+  policy: OrchestratorWorkerPolicy | undefined,
+): string {
+  if (policy?.mode === "manual") {
+    return `- Worker model mode is **Manual**: every delegated sub-agent uses \`${policy.modelSelection.instanceId}\` / \`${policy.modelSelection.model}\`. Omit \`target\` on \`delegate_task\` (Miasma automatically routes new workers to this model).`;
+  }
+  return `- Worker model mode is **Auto**: call \`orchestrator_capabilities\` once to inspect available providers and models, then choose the best capable/fast model for each task's \`role\` (\`implementation\`, \`research\`, \`review\`, \`design\`, \`test\`).`;
+}
+
+// Keep each section self-contained and well below Codex's 4,000-byte entry limit.
+export function buildCoordinatorOrchestratorSections(
+  context: CoordinatorOrchestratorInstructionContext,
+): ReadonlyArray<string> {
+  return [
+    `## Miasma Project Orchestrator
+
+You are this project's continuous **Orchestrator**. Your role is to plan, research (read-only), break work into clear tasks, delegate **all** implementation/testing/PR work to sub-agents, verify results, and report concisely to the user.
+
+- **Never code directly:** Do not edit repository files, write implementation code, or run build/commit/PR commands yourself. Read files or git state only when needed to plan or review; delegate all edits, fixes, tests, and git operations via \`delegate_task\`.
+- **Always use Miasma delegation:** Always delegate with \`delegate_task\`. Never use provider-native sub-agent tools (\`Agent\`, \`spawn_agent\`, etc.) so every worker appears on the Tasks board, can run on any provider/model, and stays reachable via \`t3_thread_read\` and \`t3_thread_send\`.
+${coordinatorWorkerPolicyInstruction(context.workerPolicy)}`,
+    `### Delegation, isolation, and review discipline
+
+- **Workspace isolation:** Use \`isolation: "shared"\` for sequential single tasks in the main checkout. Use \`isolation: "worktree"\` whenever running tasks in parallel or preparing separate branches/PRs.
+- **No polling:** Follow a running delegate's \`next\`. Never poll with \`task_status\` or sleep; completions and child questions wake this thread automatically. Stop superseded workers with \`task_cancel\`.
+- **Follow-ups and reviews:** Use \`t3_thread_send\` to send follow-up instructions to a worker's thread when continuing its task, or spawn a fresh \`delegate_task\` with \`role: "review"\` for an independent review.
+- **Verify and For Review:** When a worker finishes, verify its results and tests, move its task to \`for_review\` via \`t3_task_board\`, and give the user a concise summary with task/PR links. Do not commit, push, open PRs, or merge unless the user asks.
+- **Smart question handling:** When a worker asks a question, read it with \`t3_pending_request\`. Answer routine technical questions yourself when clear from the codebase or user intent; escalate genuine product decisions, trade-offs, blockers, or approvals concisely to the user.`,
+    `### Task board and tools
+
+- **Task board hygiene:** Pass a crisp, descriptive \`title\` and \`role\` on every \`delegate_task\`. For multi-part features, use \`t3_task_board\` (\`action: "upsert"\`) to create a parent grouping task and link child tasks under \`parentTaskId\` so progress renders cleanly in the Tasks panel.
+- Mention threads by their \`link\` verbatim. For credentials only the user can provide, call \`request_secret\`.
+- Answer data with a trend or comparison with \`html_preview\` / \`html_render\`. Only use \`preview_*\` when browser work was requested.`,
+  ];
+}
+
+export function buildCoordinatorOrchestratorInstructions(
+  context: CoordinatorOrchestratorInstructionContext,
+): string {
+  return `\n\n${buildCoordinatorOrchestratorSections(context).join("\n\n")}\n`;
+}
 
 // Codex truncates entries over 4,000 bytes; keep each section self-contained and below that limit.
 export const T3_CODE_ORCHESTRATION_SECTIONS: ReadonlyArray<string> = [
@@ -71,6 +130,7 @@ export interface T3AcpInstructionState {
   readonly interactionMode: ProviderInteractionMode;
   readonly hasT3Mcp: boolean;
   readonly hasDeviceTools: boolean;
+  readonly orchestrator?: CoordinatorOrchestratorInstructionContext | undefined;
 }
 
 /** ACP lacks system/developer fields; inject context on first prompt and tool/mode changes. */
@@ -84,10 +144,16 @@ export function t3AcpPromptWithInstructions(input: {
   if (
     input.previousState?.interactionMode === input.state.interactionMode &&
     input.previousState.hasT3Mcp === input.state.hasT3Mcp &&
-    input.previousState.hasDeviceTools === input.state.hasDeviceTools
+    input.previousState.hasDeviceTools === input.state.hasDeviceTools &&
+    coordinatorOrchestratorWorkerPolicyKey(input.previousState.orchestrator) ===
+      coordinatorOrchestratorWorkerPolicyKey(input.state.orchestrator)
   ) {
     return input.prompt;
   }
+  const coreOrchestration =
+    input.state.orchestrator !== undefined
+      ? buildCoordinatorOrchestratorInstructions(input.state.orchestrator).trim()
+      : T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim();
   const instructions = [
     input.state.interactionMode === "plan"
       ? T3_CODE_ACP_PLAN_MODE_INSTRUCTIONS
@@ -96,7 +162,7 @@ export function t3AcpPromptWithInstructions(input: {
       ? [
           T3_CODE_BROWSER_TOOL_INSTRUCTIONS.trim(),
           ...(input.state.hasDeviceTools ? [T3_CODE_DEVICE_TOOL_INSTRUCTIONS] : []),
-          T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim(),
+          coreOrchestration,
           T3_CODE_ACP_MCP_FALLBACK_INSTRUCTIONS,
         ]
       : []),
@@ -104,10 +170,16 @@ export function t3AcpPromptWithInstructions(input: {
   return `<t3_code_instructions>\n${instructions.join("\n\n")}\n</t3_code_instructions>\n\n<user_request>\n${input.prompt}\n</user_request>`;
 }
 
-const orchestrationInstructions = (hasDeviceTools: boolean) =>
-  hasDeviceTools
-    ? `${T3_CODE_ORCHESTRATION_INSTRUCTIONS}\n${T3_CODE_DEVICE_TOOL_INSTRUCTIONS}\n`
-    : T3_CODE_ORCHESTRATION_INSTRUCTIONS;
+const orchestrationInstructions = (
+  hasDeviceTools: boolean,
+  orchestrator?: CoordinatorOrchestratorInstructionContext,
+) => {
+  const core =
+    orchestrator !== undefined
+      ? buildCoordinatorOrchestratorInstructions(orchestrator)
+      : T3_CODE_ORCHESTRATION_INSTRUCTIONS;
+  return hasDeviceTools ? `${core}\n${T3_CODE_DEVICE_TOOL_INSTRUCTIONS}\n` : core;
+};
 
 function prependT3OrchestrationInstructions(prompt: string, instructions: string): string {
   return `<t3_code_orchestration_instructions>${instructions.trim()}</t3_code_orchestration_instructions>\n\n<user_request>\n${prompt}\n</user_request>`;
@@ -123,11 +195,12 @@ export function t3OrchestrationPrompt(input: {
   /** Guidance for this provider's own tools, sent until `providerInstructionsDelivered`. */
   readonly providerInstructions?: string;
   readonly providerInstructionsDelivered?: boolean;
+  readonly orchestrator?: CoordinatorOrchestratorInstructionContext | undefined;
 }): string {
   if (!input.hasT3Mcp) return input.prompt;
   const instructions = [
     !input.orchestrationDelivered
-      ? orchestrationInstructions(input.hasDeviceTools)
+      ? orchestrationInstructions(input.hasDeviceTools, input.orchestrator)
       : input.hasDeviceTools && !input.deviceInstructionsDelivered
         ? T3_CODE_DEVICE_TOOL_INSTRUCTIONS
         : undefined,
@@ -141,6 +214,7 @@ export function t3OrchestrationPrompt(input: {
 export function t3OrchestrationSystemPrompt(
   hasT3Mcp: boolean,
   hasDeviceTools: boolean,
+  orchestrator?: CoordinatorOrchestratorInstructionContext,
 ): string | undefined {
-  return hasT3Mcp ? orchestrationInstructions(hasDeviceTools) : undefined;
+  return hasT3Mcp ? orchestrationInstructions(hasDeviceTools, orchestrator) : undefined;
 }

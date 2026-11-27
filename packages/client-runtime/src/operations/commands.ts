@@ -15,6 +15,8 @@ import {
   type NodeId,
   type OrchestrationV2Command,
   type OrchestrationV2CreationSource,
+  type OrchestrationV2OrchestratorTaskStatus,
+  type OrchestratorWorkerPolicy,
   type PlanId,
   type ProjectId,
   type ProjectIconOverride,
@@ -99,6 +101,8 @@ export interface CreateThreadInput extends CommandMetadata {
   readonly interactionMode: ProviderInteractionMode;
   readonly branch: string | null;
   readonly worktreePath: string | null;
+  readonly orchestrator?: boolean;
+  readonly orchestratorWorkerPolicy?: OrchestratorWorkerPolicy;
 }
 
 export interface ThreadCommandInput extends CommandMetadata {
@@ -164,6 +168,24 @@ export interface SetThreadRuntimeModeInput extends ThreadCommandInput {
 
 export interface SetThreadInteractionModeInput extends ThreadCommandInput {
   readonly interactionMode: ProviderInteractionMode;
+}
+
+export interface SetOrchestratorWorkerPolicyInput extends ThreadCommandInput {
+  readonly workerPolicy: OrchestratorWorkerPolicy;
+}
+
+export interface UpsertOrchestratorTaskInput extends ThreadCommandInput {
+  readonly taskId?: string;
+  readonly title: string;
+  readonly parentTaskId?: string | null;
+  readonly status?: OrchestrationV2OrchestratorTaskStatus;
+  readonly subagentId?: NodeId | null;
+  readonly childThreadId?: ThreadId | null;
+}
+
+export interface SetOrchestratorTaskStatusInput extends ThreadCommandInput {
+  readonly taskId: string;
+  readonly status: OrchestrationV2OrchestratorTaskStatus;
 }
 
 interface StartThreadBootstrap {
@@ -513,6 +535,10 @@ export const createThread = Effect.fn("EnvironmentCommands.createThread")(functi
     interactionMode: input.interactionMode,
     branch: input.branch,
     worktreePath: input.worktreePath,
+    ...(input.orchestrator === true ? { orchestrator: true } : {}),
+    ...(input.orchestratorWorkerPolicy === undefined
+      ? {}
+      : { orchestratorWorkerPolicy: input.orchestratorWorkerPolicy }),
   });
 });
 
@@ -768,6 +794,45 @@ export const setThreadInteractionMode = Effect.fn("EnvironmentCommands.setThread
       commandId: yield* allocateCommandId(input),
       threadId: input.threadId,
       interactionMode: input.interactionMode,
+    });
+  },
+);
+
+export const setOrchestratorWorkerPolicy = Effect.fn(
+  "EnvironmentCommands.setOrchestratorWorkerPolicy",
+)(function* (input: SetOrchestratorWorkerPolicyInput) {
+  return yield* dispatch({
+    type: "thread.orchestrator-worker-policy.set",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    workerPolicy: input.workerPolicy,
+  });
+});
+
+export const upsertOrchestratorTask = Effect.fn("EnvironmentCommands.upsertOrchestratorTask")(
+  function* (input: UpsertOrchestratorTaskInput) {
+    return yield* dispatch({
+      type: "thread.orchestrator-task.upsert",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
+      title: input.title,
+      ...(input.parentTaskId === undefined ? {} : { parentTaskId: input.parentTaskId }),
+      ...(input.status === undefined ? {} : { status: input.status }),
+      ...(input.subagentId === undefined ? {} : { subagentId: input.subagentId }),
+      ...(input.childThreadId === undefined ? {} : { childThreadId: input.childThreadId }),
+    });
+  },
+);
+
+export const setOrchestratorTaskStatus = Effect.fn("EnvironmentCommands.setOrchestratorTaskStatus")(
+  function* (input: SetOrchestratorTaskStatusInput) {
+    return yield* dispatch({
+      type: "thread.orchestrator-task.set-status",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      taskId: input.taskId,
+      status: input.status,
     });
   },
 );

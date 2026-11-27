@@ -1,5 +1,9 @@
 // No T3 imports inside the string; resolve Pi and typebox from the user's Pi install.
-import { T3_CODE_ORCHESTRATION_INSTRUCTIONS } from "@t3tools/provider-core/server/orchestrationInstructions";
+import {
+  buildCoordinatorOrchestratorInstructions,
+  coordinatorWorkerPolicyInstruction,
+  T3_CODE_ORCHESTRATION_INSTRUCTIONS,
+} from "@t3tools/provider-core/server/orchestrationInstructions";
 import { PULL_REQUEST_LINKING_INSTRUCTIONS } from "@t3tools/provider-core/server/runtimeInstructions";
 
 export const PI_T3_MCP_EXTENSION_FILENAME = "pi-t3-mcp-extension.ts";
@@ -8,7 +12,10 @@ export const T3_MCP_URL_ENV = "T3_MCP_URL";
 export const T3_MCP_BEARER_ENV = "T3_MCP_BEARER_TOKEN";
 export const T3_PI_RUNTIME_MODE_ENV = "T3_PI_RUNTIME_MODE";
 export const T3_PI_MCP_EXTENSION_PATH_ENV = "T3_PI_MCP_EXTENSION_PATH";
+export const T3_PI_ORCHESTRATOR_ROLE_ENV = "T3_PI_ORCHESTRATOR_ROLE";
+export const T3_PI_ORCHESTRATOR_WORKER_POLICY_ENV = "T3_PI_ORCHESTRATOR_WORKER_POLICY";
 export const PI_T3_SERVICE_TIER_COMMAND = "t3-service-tier";
+export const PI_T3_ORCHESTRATOR_POLICY_COMMAND = "t3-orchestrator-policy";
 
 // These tools trigger file-change approvals, bypassed by Auto-accept edits.
 export const PI_FILE_CHANGE_TOOLS = ["edit", "write"] as const;
@@ -24,9 +31,14 @@ const URL_ENV = ${JSON.stringify(T3_MCP_URL_ENV)};
 const TOKEN_ENV = ${JSON.stringify(T3_MCP_BEARER_ENV)};
 const RUNTIME_MODE_ENV = ${JSON.stringify(T3_PI_RUNTIME_MODE_ENV)};
 const EXTENSION_PATH_ENV = ${JSON.stringify(T3_PI_MCP_EXTENSION_PATH_ENV)};
+const ORCHESTRATOR_ROLE_ENV = ${JSON.stringify(T3_PI_ORCHESTRATOR_ROLE_ENV)};
+const ORCHESTRATOR_WORKER_POLICY_ENV = ${JSON.stringify(T3_PI_ORCHESTRATOR_WORKER_POLICY_ENV)};
 const ORCHESTRATION_INSTRUCTIONS = ${JSON.stringify(T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim())};
+const COORDINATOR_ORCHESTRATOR_INSTRUCTIONS = ${JSON.stringify(buildCoordinatorOrchestratorInstructions({}).trim())};
+const COORDINATOR_ORCHESTRATOR_AUTO_LINE = ${JSON.stringify(coordinatorWorkerPolicyInstruction(undefined))};
 const PULL_REQUEST_LINKING_INSTRUCTIONS = ${JSON.stringify(PULL_REQUEST_LINKING_INSTRUCTIONS)};
 const SERVICE_TIER_COMMAND = ${JSON.stringify(PI_T3_SERVICE_TIER_COMMAND)};
+const ORCHESTRATOR_POLICY_COMMAND = ${JSON.stringify(PI_T3_ORCHESTRATOR_POLICY_COMMAND)};
 const PROTOCOL = "2025-06-18";
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const FILE_CHANGE_TOOLS = new Set(${JSON.stringify(PI_FILE_CHANGE_TOOLS)});
@@ -309,6 +321,34 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
     },
   });
 
+  const parseManualWorkerPolicy = (
+    raw: string | undefined,
+  ): { readonly instanceId: string; readonly model: string } | undefined => {
+    if (!raw) return undefined;
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      if (
+        parsed?.mode === "manual" &&
+        typeof parsed.instanceId === "string" &&
+        parsed.instanceId.length > 0 &&
+        typeof parsed.model === "string" &&
+        parsed.model.length > 0
+      ) {
+        return { instanceId: parsed.instanceId, model: parsed.model };
+      }
+    } catch {
+      return undefined;
+    }
+    return undefined;
+  };
+  let manualWorkerPolicy = parseManualWorkerPolicy(env(ORCHESTRATOR_WORKER_POLICY_ENV));
+  pi.registerCommand(ORCHESTRATOR_POLICY_COMMAND, {
+    description: "Set the orchestrator worker policy T3 Code includes in instructions",
+    handler: async (args) => {
+      manualWorkerPolicy = parseManualWorkerPolicy(args.trim());
+    },
+  });
+
   pi.on("before_provider_request", (event, ctx) => {
     const payload = event.payload;
     if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return;
@@ -552,7 +592,19 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
   // Keep guidance in the system prompt so leading slash commands still expand.
   pi.on("before_agent_start", (event, ctx) => {
     reconcileDiscovery(ctx);
-    const instructions = ORCHESTRATION_INSTRUCTIONS + "\\n\\n" + PULL_REQUEST_LINKING_INSTRUCTIONS;
+    const core = env(ORCHESTRATOR_ROLE_ENV) === "1"
+      ? manualWorkerPolicy
+        ? COORDINATOR_ORCHESTRATOR_INSTRUCTIONS.replace(
+            COORDINATOR_ORCHESTRATOR_AUTO_LINE,
+            "- Worker model mode is **Manual**: every delegated sub-agent uses \`" +
+              manualWorkerPolicy.instanceId +
+              "\` / \`" +
+              manualWorkerPolicy.model +
+              "\`. Omit \`target\` on \`delegate_task\` (Miasma automatically routes new workers to this model).",
+          )
+        : COORDINATOR_ORCHESTRATOR_INSTRUCTIONS
+      : ORCHESTRATION_INSTRUCTIONS;
+    const instructions = core + "\\n\\n" + PULL_REQUEST_LINKING_INSTRUCTIONS;
     const sections = event.systemPromptOptions?.sections;
     if (sections && typeof sections === "object" && event.systemPromptOptions?.forceSystemPrompt === undefined) {
       // A full prompt override bypasses Pi's later section rendering.

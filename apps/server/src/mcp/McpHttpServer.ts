@@ -23,7 +23,6 @@ import {
   OrchestratorMcpFailure,
   PreviewAutomationError,
   ProviderInteractionMode,
-  type RunId,
   RuntimeMode,
   OrchestrationV2LinkedSender,
   ThreadId,
@@ -1346,11 +1345,14 @@ const layerDeferredListing = McpServer.visibility(
     return Effect.fnUntraced(function* ({ method, target, headers }: McpServer.MiddlewareOptions) {
       if (method !== "tools/list") return true;
       const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
-      const providerSessionId = Option.getOrUndefined(scope)?.thread?.providerSessionId;
+      const threadScope = Option.getOrUndefined(scope)?.thread;
+      const providerSessionId = threadScope?.providerSessionId;
       if (headers[MCP_TOOL_EXPOSURE_HEADER] !== "deferred" || providerSessionId === undefined) {
         return target !== McpToolExposure.TOOL_SEARCH;
       }
-      return exposure.isListed(providerSessionId, target);
+      return exposure.isListed(providerSessionId, target, {
+        orchestrator: threadScope?.orchestrator === true,
+      });
     });
   }),
   { global: true },

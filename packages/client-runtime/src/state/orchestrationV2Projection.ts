@@ -1,6 +1,7 @@
 import { applyThreadPullRequestLinkUpdate } from "../threadPullRequests.ts";
 import {
   applyOrchestrationV2ThreadVisit,
+  applyOrchestratorTasksUpdate,
   isQueuedProviderThreadPlaceholder,
 } from "@t3tools/contracts";
 import type {
@@ -299,6 +300,14 @@ export function applyOrchestrationV2ProjectionEvent(
         ...base,
         thread: applyThreadPullRequestLinkUpdate(projection.thread, event.payload),
       };
+    case "thread.orchestrator-tasks-updated": {
+      const updated = applyOrchestratorTasksUpdate(
+        projection.thread,
+        event.payload,
+        event.occurredAt,
+      );
+      return updated === projection.thread ? projection : { ...base, thread: updated };
+    }
     case "thread.created":
     case "thread.archived":
     case "thread.unarchived":

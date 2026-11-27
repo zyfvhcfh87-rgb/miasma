@@ -3,6 +3,8 @@ import type { V2TurnStartParams__AdditionalContextEntry } from "effect-codex-app
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 
 import {
+  buildCoordinatorOrchestratorSections,
+  type CoordinatorOrchestratorInstructionContext,
   T3_CODE_BROWSER_TOOL_INSTRUCTIONS,
   T3_CODE_DEVICE_TOOL_INSTRUCTIONS,
   T3_CODE_ORCHESTRATION_SECTIONS,
@@ -43,12 +45,17 @@ export interface CodexRuntimeInfo {
 export function buildCodexAdditionalContext(
   runtime: CodexRuntimeInfo,
   toolsAvailable: boolean | T3CodeToolAvailability = true,
+  orchestrator?: CoordinatorOrchestratorInstructionContext,
 ): Record<string, V2TurnStartParams__AdditionalContextEntry> {
   const tools = toolInstructions(toolsAvailable);
+  const orchestrationSections =
+    orchestrator !== undefined
+      ? buildCoordinatorOrchestratorSections(orchestrator)
+      : T3_CODE_ORCHESTRATION_SECTIONS;
   // Split values to fit per-entry caps; number keys because Codex emits them in key order.
   return {
     ...Object.fromEntries(
-      T3_CODE_ORCHESTRATION_SECTIONS.map((section, index) => [
+      orchestrationSections.map((section, index) => [
         `t3_code_orchestration_${String(index + 1).padStart(2, "0")}`,
         { kind: "application" as const, value: section },
       ]),

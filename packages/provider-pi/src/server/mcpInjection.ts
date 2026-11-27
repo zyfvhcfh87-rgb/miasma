@@ -10,6 +10,8 @@ import {
   T3_MCP_URL_ENV,
   T3_PI_RUNTIME_MODE_ENV,
   T3_PI_MCP_EXTENSION_PATH_ENV,
+  T3_PI_ORCHESTRATOR_ROLE_ENV,
+  T3_PI_ORCHESTRATOR_WORKER_POLICY_ENV,
 } from "./mcpExtensionSource.ts";
 
 const RESERVED_PI_LAUNCH_ARGUMENTS = new Set([
@@ -297,6 +299,18 @@ export function buildPiRpcLaunch(input: {
   delete environment[T3_MCP_URL_ENV];
   delete environment[T3_MCP_BEARER_ENV];
   delete environment[T3_PI_MCP_EXTENSION_PATH_ENV];
+  delete environment[T3_PI_ORCHESTRATOR_ROLE_ENV];
+  delete environment[T3_PI_ORCHESTRATOR_WORKER_POLICY_ENV];
+
+  const manualWorkerPolicyJson =
+    input.mcpSession?.orchestrator === true &&
+    input.mcpSession.orchestratorWorkerPolicy?.mode === "manual"
+      ? JSON.stringify({
+          mode: "manual",
+          instanceId: input.mcpSession.orchestratorWorkerPolicy.modelSelection.instanceId,
+          model: input.mcpSession.orchestratorWorkerPolicy.modelSelection.model,
+        })
+      : undefined;
 
   return {
     args,
@@ -317,6 +331,12 @@ export function buildPiRpcLaunch(input: {
             [T3_MCP_BEARER_ENV]: bearerTokenFromAuthorizationHeader(
               input.mcpSession.authorizationHeader,
             ),
+            ...(input.mcpSession.orchestrator === true
+              ? { [T3_PI_ORCHESTRATOR_ROLE_ENV]: "1" }
+              : {}),
+            ...(manualWorkerPolicyJson !== undefined
+              ? { [T3_PI_ORCHESTRATOR_WORKER_POLICY_ENV]: manualWorkerPolicyJson }
+              : {}),
           }
         : {}),
     },

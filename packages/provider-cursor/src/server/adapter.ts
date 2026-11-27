@@ -60,7 +60,10 @@ import {
   rewriteCursorSkillMentions,
 } from "./skills.ts";
 import { cursorWorkspaceMcpServers } from "./workspaceMcpServers.ts";
-import { t3OrchestrationPrompt } from "@t3tools/provider-core/server/orchestrationInstructions";
+import {
+  coordinatorOrchestratorWorkerPolicyKey,
+  t3OrchestrationPrompt,
+} from "@t3tools/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
@@ -1101,6 +1104,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
         const told = yield* Ref.make<{
           readonly agent: string;
           readonly orchestration: boolean;
+          readonly orchestratorPolicyKey: string | undefined;
           readonly device: boolean;
           readonly backgroundWait: boolean;
           readonly runtime: string | undefined;
@@ -2483,6 +2487,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 yield* Ref.set(told, {
                   agent: context.run.agentId,
                   orchestration: false,
+                  orchestratorPolicyKey: undefined,
                   device: false,
                   backgroundWait: false,
                   runtime: undefined,
@@ -2869,6 +2874,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           hasDeviceTools: boolean,
           delivered: {
             readonly orchestration: boolean;
+            readonly orchestratorPolicyKey: string | undefined;
             readonly device: boolean;
             readonly backgroundWait: boolean;
             readonly runtime: string | undefined;
@@ -2879,6 +2885,11 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           if (rawText.trim() === "/compress" && turnInput.message.attachments.length === 0) {
             return { message: "/compress", prompt: undefined, runtimeInstructions: undefined };
           }
+          const orchestratorContext =
+            turnInput.appThread.lineage.orchestrator === true
+              ? { workerPolicy: turnInput.appThread.orchestratorWorkerPolicy }
+              : undefined;
+          const orchestratorPolicyKey = coordinatorOrchestratorWorkerPolicyKey(orchestratorContext);
           const newText = t3OrchestrationPrompt({
             prompt: yield* providerMessageTextWithAttachmentPaths({
               text: yield* resolveCursorSkillText(
@@ -2891,10 +2902,12 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             }),
             hasT3Mcp: mcpServers !== undefined,
             hasDeviceTools,
-            orchestrationDelivered: delivered.orchestration,
+            orchestrationDelivered:
+              delivered.orchestration && delivered.orchestratorPolicyKey === orchestratorPolicyKey,
             deviceInstructionsDelivered: delivered.device,
             providerInstructions: CURSOR_BACKGROUND_WAIT_INSTRUCTIONS,
             providerInstructionsDelivered: delivered.backgroundWait,
+            ...(orchestratorContext === undefined ? {} : { orchestrator: orchestratorContext }),
           });
           const userText =
             interrupted === undefined
@@ -2985,6 +2998,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 ? known
                 : {
                     orchestration: turnInput.nativeThreadHasTurns ?? turnInput.runOrdinal > 1,
+                    orchestratorPolicyKey: undefined,
                     device: false,
                     backgroundWait: false,
                     runtime: undefined,
@@ -3086,9 +3100,16 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               );
             // A resume sends no new instructions, and a native one still continues the stopped request.
             if (resume === undefined) {
+              const orchestratorPolicyKey = coordinatorOrchestratorWorkerPolicyKey(
+                turnInput.appThread.lineage.orchestrator === true
+                  ? { workerPolicy: turnInput.appThread.orchestratorWorkerPolicy }
+                  : undefined,
+              );
               yield* Ref.set(told, {
                 agent: agent.nativeThreadId,
                 orchestration: !compacted && (delivered.orchestration || mcpServers !== undefined),
+                orchestratorPolicyKey:
+                  compacted || mcpServers === undefined ? undefined : orchestratorPolicyKey,
                 device: !compacted && hasDeviceTools,
                 backgroundWait:
                   !compacted && (delivered.backgroundWait || mcpServers !== undefined),
@@ -3599,6 +3620,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                   Ref.set(told, {
                     agent,
                     orchestration: false,
+                    orchestratorPolicyKey: undefined,
                     device: false,
                     backgroundWait: false,
                     runtime: undefined,

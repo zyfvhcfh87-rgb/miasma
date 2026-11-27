@@ -39,6 +39,8 @@ import {
   OrchestrationV2Actor,
   OrchestrationV2CreationSource,
   OrchestrationV2DelegatedFrom,
+  OrchestrationV2OrchestratorTask,
+  OrchestrationV2OrchestratorTaskStatus,
   OrchestrationV2RunStatus,
   OrchestrationV2TurnItemStatus,
 } from "./orchestrationV2.ts";
@@ -643,6 +645,7 @@ export type OrchestratorMcpThreadInterruptResult = typeof OrchestratorMcpThreadI
 
 export const OrchestratorMcpCapabilitiesInput = Schema.Struct({
   environmentId: OrchestratorMcpEnvironmentTarget,
+  projectId: Schema.optional(ProjectId),
   search: Schema.optional(
     TrimmedNonEmptyString.check(Schema.isMaxLength(200)).annotate({
       description: "Match model ids and labels. Replaces the short list.",
@@ -983,6 +986,23 @@ export const OrchestratorMcpDeleteScheduledTaskResult = Schema.Struct({
 });
 export type OrchestratorMcpDeleteScheduledTaskResult =
   typeof OrchestratorMcpDeleteScheduledTaskResult.Type;
+
+export const OrchestratorMcpTaskBoardInput = Schema.Struct({
+  action: Schema.Literals(["list", "upsert", "set_status"]),
+  taskId: Schema.optional(TrimmedNonEmptyString),
+  title: Schema.optional(OrchestratorMcpTitle),
+  parentTaskId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  status: Schema.optional(OrchestrationV2OrchestratorTaskStatus),
+  subagentId: Schema.optional(Schema.NullOr(NodeId)),
+  childThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+});
+export type OrchestratorMcpTaskBoardInput = typeof OrchestratorMcpTaskBoardInput.Type;
+
+export const OrchestratorMcpTaskBoardResult = Schema.Struct({
+  tasks: Schema.Array(OrchestrationV2OrchestratorTask),
+  task: Schema.optional(OrchestrationV2OrchestratorTask),
+});
+export type OrchestratorMcpTaskBoardResult = typeof OrchestratorMcpTaskBoardResult.Type;
 
 export class OrchestratorMcpFailure extends Schema.TaggedError<OrchestratorMcpFailure>()(
   "OrchestratorMcpFailure",

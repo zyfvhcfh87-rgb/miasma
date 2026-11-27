@@ -217,6 +217,8 @@ import {
 } from "../../provider/EventNdjsonLogger.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import {
+  buildCoordinatorOrchestratorInstructions,
+  type CoordinatorOrchestratorInstructionContext,
   T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH,
   T3_CODE_ORCHESTRATION_INSTRUCTIONS,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
@@ -2533,6 +2535,7 @@ export function makeClaudeQueryOptions(input: {
   readonly agentFeedback?: AgentFeedbackMode;
   /** The thread's T3 MCP session holds the `device` capability. */
   readonly deviceToolsAvailable?: boolean;
+  readonly orchestrator?: CoordinatorOrchestratorInstructionContext;
   readonly tools?: ClaudeAgentSdkQueryTools;
   readonly allowedTools?: ReadonlyArray<string>;
   readonly disallowedTools?: ReadonlyArray<string>;
@@ -2697,7 +2700,9 @@ export function makeClaudeQueryOptions(input: {
         }) +
           (input.mcpServers === undefined
             ? ""
-            : T3_CODE_ORCHESTRATION_INSTRUCTIONS +
+            : (input.orchestrator !== undefined
+                ? buildCoordinatorOrchestratorInstructions(input.orchestrator)
+                : T3_CODE_ORCHESTRATION_INSTRUCTIONS) +
               CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS +
               CLAUDE_SEND_TO_USER_INSTRUCTIONS +
               (deviceInstructions
@@ -13631,6 +13636,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ? {}
               : { mcpServers: mcpOverrides.mcpServers }),
             deviceToolsAvailable: mcpSession?.capabilities?.has("device") === true,
+            ...(turnInput.appThread.lineage.orchestrator === true
+              ? {
+                  orchestrator: {
+                    workerPolicy: turnInput.appThread.orchestratorWorkerPolicy,
+                  },
+                }
+              : {}),
             permissionMode: queryPolicy.permissionMode,
             ...(queryPolicy.allowDangerouslySkipPermissions === undefined
               ? {}
