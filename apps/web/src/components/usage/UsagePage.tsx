@@ -1,3 +1,5 @@
+import { ChatGptUsageButton } from "../settings/ChatGptUsageButton";
+import { usesChatGptSharing } from "@t3tools/shared/chatGptSharing";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
@@ -28,6 +30,7 @@ import { cn } from "../../lib/utils";
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { resolveHour12 } from "../../timestampFormat";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { environmentPresentations } from "../../state/presentation";
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { isModelPickerOpen } from "../../modelPickerVisibility";
@@ -212,6 +215,9 @@ export function UsagePage() {
   const shownHourly = shownWindow.resolution === "hour";
   const refreshingUsage = isRefreshing;
   const showingKept = shown !== null && shown.window !== window;
+  const presentationsWithProviders = useAtomValue(
+    environmentPresentations.presentationsWithProvidersAtom,
+  );
 
   const canReadDiagnostics = selectedEnvironments.some(
     (environment) => environment.canReadDiagnostics,
@@ -284,6 +290,13 @@ export function UsagePage() {
     shownWindow.sinceTime === undefined || shownWindow.untilTime === undefined
       ? []
       : enumerateHourStarts(shownWindow.sinceTime, shownWindow.untilTime);
+  const showChatGptSharing =
+    !hiddenProviders.has("codex") &&
+    [...presentationsWithProviders].some(
+      ([id, presentation]) =>
+        (selectedEnvironmentIds === null || selectedEnvironmentIds.has(id)) &&
+        (presentation.serverConfig?.providers ?? []).some(usesChatGptSharing),
+    );
   const windowLabel =
     shownHourly && shownWindow.sinceTime !== undefined && shownWindow.untilTime !== undefined
       ? gt("{start} to {end}", {
@@ -473,6 +486,7 @@ export function UsagePage() {
                 selectedEnvironments={selectedEnvironments}
                 hiddenProviders={hiddenProviders}
                 refreshingUsage={refreshingUsage}
+                showChatGptSharing={showChatGptSharing}
                 onSelectModel={selectUsageModel}
               />
             )}
@@ -518,6 +532,7 @@ function UsageOverview({
   selectedEnvironments,
   hiddenProviders,
   refreshingUsage,
+  showChatGptSharing,
   onSelectModel,
 }: {
   readonly merged: MergedUsage;
@@ -530,6 +545,7 @@ function UsageOverview({
   readonly selectedEnvironments: readonly EnvironmentUsageStatus[];
   readonly hiddenProviders: ReadonlySet<UsageProviderKind>;
   readonly refreshingUsage: boolean;
+  readonly showChatGptSharing: boolean;
   readonly onSelectModel: (key: string) => void;
 }) {
   const gt = useGT();
@@ -624,6 +640,15 @@ function UsageOverview({
               )}
             </p>
           </div>
+
+          {showChatGptSharing ? (
+            <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+              <span>
+                <T>ChatGPT shared usage</T>
+              </span>
+              <ChatGptUsageButton size="xs" />
+            </div>
+          ) : null}
 
           {rankedProviders.map((provider) => {
             const totals = merged.providers.find((entry) => entry.provider === provider);

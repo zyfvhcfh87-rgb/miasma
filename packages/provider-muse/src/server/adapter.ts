@@ -46,6 +46,7 @@ import { buildCoordinatorOrchestratorInstructions } from "@t3tools/provider-core
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import { museModelCapabilities, resolveMuseReasoningEffort } from "./modelCatalog.ts";
 import {
+  LATEST_DATE_MS,
   MuseApproval,
   MuseCompactResult,
   MuseContextUsage,
@@ -276,11 +277,23 @@ function isMuseUsageLimitFailure(message: string | undefined): boolean {
 const NAMED_RESET =
   /\bresets at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))/i;
 
-/** The reset a usage-limit refusal names in its message, when it is still in the future. */
-function museUsageLimitResetAt(message: string | undefined, nowMs: number): string | null {
+/** The reset a usage-limit refusal names in its quota payload or message, when it is still in the future. */
+function museUsageLimitResetAt(
+  message: string | undefined,
+  nowMs: number,
+  quota?: { readonly resetsAtMs: number },
+): string | null {
+  if (
+    quota !== undefined &&
+    Number.isFinite(quota.resetsAtMs) &&
+    quota.resetsAtMs > nowMs &&
+    quota.resetsAtMs <= LATEST_DATE_MS
+  ) {
+    return DateTime.formatIso(DateTime.makeUnsafe(quota.resetsAtMs));
+  }
   const named = message?.match(NAMED_RESET)?.[1];
   const ms = named === undefined ? undefined : Date.parse(named);
-  return ms !== undefined && Number.isFinite(ms) && ms > nowMs
+  return ms !== undefined && Number.isFinite(ms) && ms > nowMs && ms <= LATEST_DATE_MS
     ? DateTime.formatIso(DateTime.makeUnsafe(ms))
     : null;
 }
@@ -291,6 +304,7 @@ const INFORMATIONAL_NOTIFICATIONS = new Set([
   "session/todoListChanged",
   "turn/retryScheduled",
   "turn/modelRetryScheduled",
+  "usage/changed",
 ]);
 const TOOLS_WITH_NATIVE_ROWS = new Set(["write_todos", "request_user_input", "workflow"]);
 // Reminder children and other runtime items can start while the model is still retrying.
@@ -1049,6 +1063,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
         status: "completed" | "cancelled" | "interrupted" | "failed",
         detail?: string,
         disposition: "reusable" | "broken" = "reusable",
+        quota?: { readonly resetsAtMs: number },
       ) {
         if (active !== turn || seenTerminals.has(turn.nativeId)) return;
         seenTerminals.add(turn.nativeId);
@@ -1086,7 +1101,8 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
         yield* updateSession(disposition === "broken" ? "error" : "ready", detail ?? null);
         active = undefined;
         if (status === "failed") {
-          const usageLimited = disposition === "reusable" && isMuseUsageLimitFailure(detail);
+          const usageLimited =
+            disposition === "reusable" && (quota !== undefined || isMuseUsageLimitFailure(detail));
           const failure = makeProviderFailure({
             class:
               disposition === "broken"
@@ -1096,7 +1112,13 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                   : "provider_error",
             message: detail ?? "Muse turn failed.",
             ...(usageLimited
-              ? { resetAt: museUsageLimitResetAt(detail, DateTime.toEpochMillis(completedAt)) }
+              ? {
+                  resetAt: museUsageLimitResetAt(
+                    detail,
+                    DateTime.toEpochMillis(completedAt),
+                    quota,
+                  ),
+                }
               : {}),
           });
           const base = baseItem(turn, `failure:${turn.nativeId}`, completedAt);
@@ -1576,7 +1598,13 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                     ? "interrupted"
                     : "cancelled"
                   : "failed";
-            yield* finish(turn, status, result.error?.message ?? result.reason, "reusable");
+            yield* finish(
+              turn,
+              status,
+              result.error?.message ?? result.reason,
+              "reusable",
+              result.error?.quota,
+            );
             break;
           }
           case "approval/requested":

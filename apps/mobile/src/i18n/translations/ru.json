@@ -4139,6 +4139,12 @@
   "224ab07f381051bf": "Завершён",
   "2c7ebf843a3b1ae2": "Ошибка",
   "342a892bf3b5424d": "Не запущен",
+  "fd7ccbd22673580a": "ChatGPT token sharing is active",
+  "4edecd89f212de98": "ChatGPT sharing is on",
+  "953380411ccc070e": "Eligible usage uses your ChatGPT plan. Credit settings and limits are managed in ChatGPT.",
+  "3dbc42464b2bfb20": "Fast and Ultrafast are unavailable with this ChatGPT connection. Use an existing Codex CLI login for speed options your account supports.",
+  "5c0eb4217bb673bd": "Using ChatGPT plan",
+  "6df4c22a9ae17336": "Manage usage",
   "8d9617edf6eee5b9": "Не удалось отправить решение по подтверждению.",
   "97d6946415db6c16": [
     "Подтверждение от ",
@@ -5054,6 +5060,16 @@
   "a6f6f92c132e0412": "Новая версия загружена и установится автоматически, когда вы в следующий раз выйдете из приложения. Установить сейчас?",
   "b0d022fe9d78def7": "Позже",
   "9d3fd34ff062c44b": "Установить сейчас",
+  "7d72af75b2812d60": "{provider} on {environment}",
+  "6753deea17e91bf5": "ChatGPT shared usage",
+  "207a400af41d5310": [
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    ". Open ChatGPT with the account you connected."
+  ],
   "43e655305262c0c7": "Стоимость",
   "88151c994a23d697": "Токены",
   "e4d8f24f51cb20b2": "24 ч",

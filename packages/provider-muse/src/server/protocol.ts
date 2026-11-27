@@ -156,10 +156,13 @@ export const MuseTurnCompleted = Schema.Struct({
   error: Schema.optional(
     Schema.Struct({
       message: Schema.String,
+      quota: Schema.optional(Schema.Struct({ resetsAtMs: Schema.Finite })),
     }),
   ),
   usage: Schema.optional(MuseUsage),
 });
+/** The latest instant a JavaScript Date holds; formatting a later one throws. */
+export const LATEST_DATE_MS = 8.64e15;
 /** `turn/retryScheduled` carries `reason`; `turn/modelRetryScheduled` carries the HTTP failure. */
 export const MuseRetryScheduled = Schema.Struct({
   turnId: NonEmptyString,

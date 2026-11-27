@@ -30,6 +30,14 @@ describe("Usage page preferences", () => {
 
     values.set(key, '{"metric":"tokens","windowDays":30}');
     expect(readUsagePagePreferences()).toEqual({ metric: "tokens", windowDays: 30 });
+
+    values.set(key, '{"metric":"limits","windowDays":90,"hiddenProviders":["codex"]}');
+    expect(readUsagePagePreferences()).toEqual({
+      metric: "cost",
+      windowDays: 90,
+      hiddenProviders: ["codex"],
+    });
+    expect(console.error).not.toHaveBeenCalled();
   });
 
   // regression: #10189 an invalid saved usage selection was never replaced

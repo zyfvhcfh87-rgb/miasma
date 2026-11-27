@@ -220,7 +220,19 @@ describe("thread execution presentation", () => {
     expect(source({ runs: starting, providerSessions: [session("Plan limit reached")] })).toBe(
       "limit-error@2026-07-28T10:00:00.000Z",
     );
-    expect(deriveResumableRunId(projection)).toBeNull();
+    expect(deriveResumableRunId(projection, deriveThreadRuntime(projection))).toBe(failed.id);
+    expect(
+      deriveResumableRunId(
+        {
+          ...projection,
+          turnItems: [{ ...item, failure: { ...item.failure, class: "provider_error" as const } }],
+        },
+        deriveThreadRuntime({
+          ...projection,
+          turnItems: [{ ...item, failure: { ...item.failure, class: "provider_error" as const } }],
+        }),
+      ),
+    ).toBeNull();
     expect(
       deriveThreadRuntime({
         ...projection,
@@ -268,7 +280,7 @@ describe("thread execution presentation", () => {
         { id: sessionId, capabilities: { turns: { supportsNativeResume: nativeResume } } },
       ],
     } as unknown as typeof v2Projection;
-    expect(deriveResumableRunId(projection)).toBe(resumes ? stopped.id : null);
+    expect(deriveResumableRunId(projection, null)).toBe(resumes ? stopped.id : null);
   });
 
   // regression: #15029 working timers no longer reset on every background wake
@@ -448,7 +460,7 @@ describe("thread execution presentation", () => {
       status: "interrupted",
       activeRunId: null,
     });
-    expect(deriveResumableRunId(projection)).toBe(interrupted.id);
+    expect(deriveResumableRunId(projection, deriveThreadRuntime(projection))).toBe(interrupted.id);
 
     const resumed = { ...projection, runs: [interrupted, { ...held, queueHeld: false }] };
     expect(deriveThreadRuntime(resumed)).toMatchObject({ status: "queued" });

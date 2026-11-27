@@ -268,23 +268,8 @@ keeps the provider's explanation. Retry after the limit resets, or switch to
 another provider instance.
 Press **Resume** in an empty composer to continue a limited or interrupted turn
 manually when the provider supports native continuation, or send a message to continue.
-Do this when the provider reports no reset time, because nothing continues the turn on its own.
 Queued messages stay saved while the limit blocks the thread. They run after
 the continuation finishes. If the queue was held by a restart, resume it then.
-
-When the provider reports a reset time, choose **Resume at reset** to schedule a
-continuation. You can cancel it from the thread. Enable **Resume after
-usage limits** in **Settings → Threads** to schedule limit stops by default.
-The environment must be running when the reset arrives; it resumes overdue
-continuations after a restart. Stopping the thread, sending a new message,
-archiving, or settling it prevents a pending continuation from starting.
-
-Choose **Snooze until reset** to hide the thread until its allowance returns.
-Snooze and auto-resume are independent: snooze alone wakes the thread without
-sending a message; enabling both wakes and continues it. **Wake now** cancels
-the snooze. Enable **Snooze until limits reset** in thread behavior settings to
-snooze limit stops by default. Providers without a reset time offer manual
-retry and the normal snooze choices.
 
 On web and desktop, use **Agents** to follow work delegated to subagents. Click
 a subagent there or on its conversation card to open it in the right panel,

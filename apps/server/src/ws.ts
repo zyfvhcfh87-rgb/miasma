@@ -1758,19 +1758,14 @@ export const layerWsRpc = (
         readonly catalogDigests?: boolean;
       }) {
         const keybindingsConfig = yield* keybindings.loadConfigState;
-        const providers = yield* providerRegistry.getProviders.pipe(
-          Effect.flatMap((currentProviders) =>
-            options.workspaceSnapshotsOnDemand
-              ? Effect.succeed(
-                  withoutWorkspaceSnapshots(
-                    currentProviders,
-                    options.catalogsPerCwd,
-                    options.catalogDigests,
-                  ),
-                )
-              : Effect.succeed(currentProviders),
-          ),
-        );
+        const currentProviders = yield* providerRegistry.getProviders;
+        const providers = options.workspaceSnapshotsOnDemand
+          ? withoutWorkspaceSnapshots(
+              currentProviders,
+              options.catalogsPerCwd,
+              options.catalogDigests,
+            )
+          : currentProviders;
         const settings = ServerSettings.redactServerSettingsForClient(
           yield* serverSettings.getSettings,
           settingsClient,

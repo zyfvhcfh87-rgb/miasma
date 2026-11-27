@@ -96,15 +96,6 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
   const automaticModel =
     targets.length > 0 &&
     targets.every((candidate) => candidate.settings.defaultModelSelection === null);
-  const mixedFallback = useScopedSettingsMixed(["fallbackModelSelection"]);
-  const fallbackSelection = settings.fallbackModelSelection ?? selection;
-  const fallbackEntry = entries.find((entry) => entry.instanceId === fallbackSelection?.instanceId);
-  const fallbackModelOptions = getCustomModelOptionsByInstance(
-    settings,
-    providers,
-    fallbackSelection?.instanceId,
-    fallbackSelection?.model,
-  );
   const mixedPermissions = useScopedSettingsMixed(["defaultRuntimeMode"]);
   const PermissionIcon = runtimeModeConfig[settings.defaultRuntimeMode].icon;
   const mixedWorkspace = useScopedSettingsMixed(["defaultThreadEnvMode"]);
@@ -269,87 +260,6 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
     />
   );
 
-  const fallbackRow = !isProjectScope ? (
-    <SettingsRow
-      serverScoped
-      settingKeys={["fallbackModelSelection"]}
-      mixed={mixedFallback}
-      {...searchableSetting("fallback-model")}
-      description={gt("Used for new threads when the default model's provider is out of usage.")}
-      resetAction={
-        mixedFallback || settings.fallbackModelSelection !== null ? (
-          <SettingResetButton
-            ariaLabel={gt("Reset fallback model to default")}
-            onClick={() => updateSettings({ fallbackModelSelection: null })}
-          />
-        ) : null
-      }
-      control={
-        fallbackSelection ? (
-          <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
-            <ProviderModelPicker
-              environmentId={representative?.environmentId ?? null}
-              activeInstanceId={fallbackSelection.instanceId}
-              model={fallbackSelection.model}
-              lockedProvider={null}
-              instanceEntries={entries}
-              modelOptionsByInstance={fallbackModelOptions}
-              triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-              triggerAriaLabel={gt("Fallback model")}
-              {...(mixedFallback
-                ? { triggerLabel: gt("Mixed", { $context: "values differ across targets" }) }
-                : settings.fallbackModelSelection === null
-                  ? { triggerLabel: gt("None", { $context: "no fallback model" }) }
-                  : {})}
-              getModelDisabledReason={modelDisabledReason}
-              onInstanceModelChange={(instanceId, model) => {
-                const reason = modelDisabledReason(instanceId, model);
-                if (reason) {
-                  toastManager.add({
-                    type: "error",
-                    title: gt("Fallback model not saved"),
-                    description: reason,
-                  });
-                  return;
-                }
-                updateSettings({
-                  fallbackModelSelection: pickModelSelection(
-                    mixedFallback ? null : settings.fallbackModelSelection,
-                    instanceId,
-                    model,
-                  ),
-                });
-              }}
-            />
-            {settings.fallbackModelSelection !== null && fallbackEntry && !mixedFallback ? (
-              <TraitsPicker
-                provider={fallbackEntry.driverKind}
-                models={fallbackEntry.models}
-                model={fallbackSelection.model}
-                modelOptions={fallbackSelection.options ?? []}
-                allowPromptInjectedEffort={false}
-                triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                onModelOptionsChange={(options) =>
-                  updateSettings({
-                    fallbackModelSelection: createModelSelection(
-                      fallbackSelection.instanceId,
-                      fallbackSelection.model,
-                      options,
-                    ),
-                  })
-                }
-              />
-            ) : null}
-          </div>
-        ) : (
-          <span className="text-sm text-muted-foreground">
-            <T>No providers available</T>
-          </span>
-        )
-      }
-    />
-  ) : null;
-
   return (
     <SettingsSection
       id={category === "source-control" ? "source-control-defaults" : "project-defaults"}
@@ -358,13 +268,11 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
       {category === "project" ? (
         <>
           {modelRow}
-          {fallbackRow}
           {workspaceRow}
         </>
       ) : category === "general" ? (
         <>
           {modelRow}
-          {fallbackRow}
           <SettingsRow
             serverScoped
             settingKeys={["defaultRuntimeMode"]}

@@ -222,7 +222,6 @@ import {
 import {
   NO_PROVIDER_MODEL_SELECTION,
   providerInstanceEntriesFor,
-  resolveProjectDefaultProviderModelSelection,
   shouldShowInstanceBadge,
 } from "../providerInstances";
 import {
@@ -833,20 +832,11 @@ export default function ChatView(props: ChatViewProps) {
         fallbackDraftProject ?? undefined,
       ).settings.defaultModelSelection
     : null;
-  const draftModelSelection =
-    draftDefaultModelSelection ??
-    (draftThread
-      ? resolveProjectDefaultProviderModelSelection(
-          providersByEnvironment.get(draftThread.environmentId) ?? [],
-          settings,
-          draftThread.projectId,
-        )
-      : null);
   const localDraftThread = draftThread
     ? buildLocalDraftThread(
         threadId,
         draftThread,
-        draftModelSelection ?? NO_PROVIDER_MODEL_SELECTION,
+        draftDefaultModelSelection ?? NO_PROVIDER_MODEL_SELECTION,
         messages,
       )
     : undefined;
@@ -881,7 +871,9 @@ export default function ChatView(props: ChatViewProps) {
     serverProjection?.runs.some((run) => run.status === "queued" && run.queueHeld === true) ===
       true;
   const resumableRunId =
-    !isServerThread || serverProjection === null ? null : deriveResumableRunId(serverProjection);
+    !isServerThread || serverProjection === null
+      ? null
+      : deriveResumableRunId(serverProjection, serverRuntime);
   const canResume =
     serverProjection !== null &&
     canResumeThread(serverProjection, resumableRunId, hasHeldQueuedRuns);
@@ -1188,10 +1180,7 @@ export default function ChatView(props: ChatViewProps) {
   const activeProjectScripts = activeProject ? resolveProjectScripts(settings, activeProject) : [];
   const { projectCloneBannerItem, projectCloneSendBlockReason } =
     useProjectCloneBanner(activeProjectRef);
-  const activeProjectDefaultModelSelection =
-    !isServerThread && draftModelSelection !== null
-      ? draftModelSelection
-      : activeProjectSettings.settings.defaultModelSelection;
+  const activeProjectDefaultModelSelection = activeProjectSettings.settings.defaultModelSelection;
   const handleNewThreadInActiveProject = () => {
     startNewThreadForProject(activeProjectRef, handleNewThread);
   };
@@ -3499,6 +3488,9 @@ export default function ChatView(props: ChatViewProps) {
               threadError={timelineThreadError}
               threadErrorClass={
                 threadErrorIsServerRuntimeError ? (serverRuntime?.lastErrorClass ?? null) : null
+              }
+              threadErrorCode={
+                threadErrorIsServerRuntimeError ? (serverRuntime?.lastErrorCode ?? null) : null
               }
               threadErrorBannerKey={threadErrorBannerKey}
               setThreadError={setThreadError}

@@ -1,5 +1,4 @@
 import type { ContextWindowSnapshot } from "@t3tools/client-runtime/state/context-window";
-import { Link } from "@tanstack/react-router";
 import { useGT, useLocale, useMessages } from "gt-react";
 import type { ReactNode } from "react";
 
@@ -78,7 +77,7 @@ export function ThreadDetailsContext({ usage }: { readonly usage: ContextWindowS
   );
 }
 
-/** One label, hairline, and value row; the whole row opens the details tooltip. With `opensUsage` it links to the usage page. */
+/** One label, hairline, and value row; the whole row opens the details tooltip. */
 function UsageRow({
   label,
   fill,
@@ -88,7 +87,6 @@ function UsageRow({
   ariaValue = value,
   tooltip,
   muted = false,
-  opensUsage = false,
 }: {
   readonly label: string;
   /** Bar fill from 0 to 100. Null hides the bar. */
@@ -100,25 +98,17 @@ function UsageRow({
   readonly ariaValue?: string;
   readonly tooltip: ReactNode;
   readonly muted?: boolean;
-  readonly opensUsage?: boolean;
 }) {
   const gt = useGT();
   const rowProps = {
     "aria-label": gt("{label}: {value}", { label, value: ariaValue }),
     className: cn(
-      "col-span-3 grid h-6 grid-cols-subgrid items-center rounded-lg px-2.5 outline-none hover:bg-black/[0.035] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-popup-open:bg-black/[0.035] dark:hover:bg-white/[0.08] dark:data-popup-open:bg-white/[0.08]",
-      opensUsage
-        ? "group cursor-pointer active:bg-black/[0.06] dark:active:bg-white/[0.12]"
-        : "cursor-default",
+      "col-span-3 grid h-6 grid-cols-subgrid cursor-default items-center rounded-lg px-2.5 outline-none hover:bg-black/[0.035] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-popup-open:bg-black/[0.035] dark:hover:bg-white/[0.08] dark:data-popup-open:bg-white/[0.08]",
     ),
   };
   return (
     <Tooltip>
-      <TooltipTrigger
-        render={
-          opensUsage ? <Link to="/usage" {...rowProps} /> : <div tabIndex={0} {...rowProps} />
-        }
-      >
+      <TooltipTrigger render={<div tabIndex={0} {...rowProps} />}>
         <span className="max-w-28 truncate text-muted-foreground group-hover:text-foreground">
           {label}
         </span>
@@ -167,10 +157,7 @@ function UsageRow({
       </TooltipTrigger>
       {/* Rows sit 8px inside the card; clear its edge instead of overlapping it. */}
       <TooltipPopup side="left" sideOffset={16}>
-        <div className="flex flex-col gap-0.5">
-          {tooltip}
-          {opensUsage ? <span className="text-muted-foreground">{gt("Open usage")}</span> : null}
-        </div>
+        <div className="flex flex-col gap-0.5">{tooltip}</div>
       </TooltipPopup>
     </Tooltip>
   );

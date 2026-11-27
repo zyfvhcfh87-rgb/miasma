@@ -43,6 +43,7 @@ import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { waitForQuerySettled } from "../../state/waitForQuerySettled";
 import { Button } from "../ui/button";
 import { ChatGptConnectionButton } from "./ChatGptConnectionButton";
+import { ChatGptUsageButton } from "./ChatGptUsageButton";
 import { ChatGptAccountPicker } from "./ChatGptAccountPicker";
 import { Input } from "../ui/input";
 import { OpenAI } from "../Icons";
@@ -1096,6 +1097,11 @@ function ManagedCodexSetup({
           </div>
         }
       />
+      {authenticated ? (
+        <div className="flex justify-end px-3 py-1 sm:px-4">
+          <ChatGptUsageButton />
+        </div>
+      ) : null}
       {logoutWarning ? (
         <p role="alert" className="px-3 py-2 text-xs text-muted-foreground sm:px-4">
           {logoutWarning}

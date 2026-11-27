@@ -126,16 +126,14 @@ describe("V2 storage cleanup eligibility", () => {
   const candidate = () => shell({ branch: "feature", worktreePath: "/worktrees/feature" });
 
   it("allows an idle worktree and rejects the project checkout", () => {
-    expect(storageCleanupThreadIdle(candidate(), NOW_MS, DEFAULT_SERVER_SETTINGS)).toBe(true);
-    expect(storageCleanupThreadIdle(shell(), NOW_MS, DEFAULT_SERVER_SETTINGS)).toBe(false);
+    expect(storageCleanupThreadIdle(candidate(), NOW_MS)).toBe(true);
+    expect(storageCleanupThreadIdle(shell(), NOW_MS)).toBe(false);
   });
 
   it.each(["running", "starting", "preparing", "waiting", "queued"] as const)(
     "retains a worktree while its thread is %s",
     (status) => {
-      expect(
-        storageCleanupThreadIdle(candidateWithStatus(status), NOW_MS, DEFAULT_SERVER_SETTINGS),
-      ).toBe(false);
+      expect(storageCleanupThreadIdle(candidateWithStatus(status), NOW_MS)).toBe(false);
     },
   );
 
@@ -149,7 +147,6 @@ describe("V2 storage cleanup eligibility", () => {
             pendingBackgroundTasks: [{ taskId: "task-1", kind: "command" }],
           },
           NOW_MS,
-          DEFAULT_SERVER_SETTINGS,
         ),
       ).toBe(false);
     },
@@ -169,7 +166,6 @@ describe("V2 storage cleanup eligibility", () => {
             },
           },
           NOW_MS,
-          DEFAULT_SERVER_SETTINGS,
         ),
       ).toBe(false);
     },
@@ -177,21 +173,13 @@ describe("V2 storage cleanup eligibility", () => {
 
   it("retains an active run even if the shell status is idle", () => {
     expect(
-      storageCleanupThreadIdle(
-        { ...candidate(), activeRunId: RunId.make("run") },
-        NOW_MS,
-        DEFAULT_SERVER_SETTINGS,
-      ),
+      storageCleanupThreadIdle({ ...candidate(), activeRunId: RunId.make("run") }, NOW_MS),
     ).toBe(false);
   });
 
   it("retains a queued prompt before the new run has been projected", () => {
     expect(
-      storageCleanupThreadIdle(
-        { ...candidate(), latestUserMessageAt: at(-1_000) },
-        NOW_MS,
-        DEFAULT_SERVER_SETTINGS,
-      ),
+      storageCleanupThreadIdle({ ...candidate(), latestUserMessageAt: at(-1_000) }, NOW_MS),
     ).toBe(false);
   });
 

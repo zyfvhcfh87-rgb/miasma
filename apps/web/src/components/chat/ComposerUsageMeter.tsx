@@ -153,16 +153,13 @@ function ComposerUsageMeterView({
   return meter;
 }
 
-/**
- * Compact usage meter docked in the composer's context strip.
- * Shows today's local spend for the selected provider/model.
- */
-export function ComposerUsageMeter(props: ComposerUsageMeterProps) {
+function VisibleComposerUsageMeter(props: ComposerUsageMeterProps) {
   const nowMinute = useNowMinute();
   const now = Date.parse(`${nowMinute}:00Z`);
 
   // Stable daily key so the usage summary query only refreshes across day boundaries.
-  const todayWindow = makeWindow(1, new Date(now));
+  const { sinceDay, untilDay, timeZone, resolution } = makeWindow(1, new Date(now));
+  const todayWindow = { sinceDay, untilDay, timeZone, resolution };
   const selectedEnvironments = new Set<EnvironmentId>([props.environmentId]);
   const usage = useUsage(todayWindow, selectedEnvironments);
   const provider = props.providers.find((entry) => entry.instanceId === props.providerInstanceId);
@@ -180,4 +177,13 @@ export function ComposerUsageMeter(props: ComposerUsageMeterProps) {
       className={props.className}
     />
   );
+}
+
+/**
+ * Compact usage meter docked in the composer's context strip.
+ * Shows today's local spend for the selected provider/model.
+ */
+export function ComposerUsageMeter(props: ComposerUsageMeterProps) {
+  if (use(HiddenThreadContext)) return null;
+  return <VisibleComposerUsageMeter {...props} />;
 }

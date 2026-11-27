@@ -618,8 +618,8 @@ it("opens the fallback search target across all environments from a checkout", a
     path: "threads",
     component: () => (
       <SettingsScopeProvider search={settings.useSearch()} onChange={() => {}}>
-        <SettingsScopeNotice target="all" targetId="fallback-model">
-          Choose all environments to edit the fallback model.
+        <SettingsScopeNotice target="all" targetId="provider-update-checks">
+          Choose all environments to edit provider update checks.
         </SettingsScopeNotice>
       </SettingsScopeProvider>
     ),
@@ -631,7 +631,9 @@ it("opens the fallback search target across all environments from a checkout", a
   });
   const router = createRouter({
     routeTree: root.addChildren([settings.addChildren([threads])]),
-    history: createMemoryHistory({ initialEntries: [`/settings/threads?${query}#fallback-model`] }),
+    history: createMemoryHistory({
+      initialEntries: [`/settings/threads?${query}#provider-update-checks`],
+    }),
   });
   await router.load();
   // This route needs the real scope-retention middleware used by settings search.
@@ -643,7 +645,7 @@ it("opens the fallback search target across all environments from a checkout", a
   );
   await userEvent.click(page.getByRole("button", { name: "Open all environments" }));
   await vi.waitFor(() => expect(router.state.location.search).toEqual({}));
-  expect(router.state.location.hash).toBe("fallback-model");
+  expect(router.state.location.hash).toBe("provider-update-checks");
 });
 
 describe("project settings scope", () => {

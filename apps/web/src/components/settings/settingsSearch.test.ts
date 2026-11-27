@@ -62,13 +62,6 @@ describe("searchSettings", () => {
     expect(searchSettings("long lines", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
     const spanish = (message: string) => (message === "Word wrap" ? "Ajuste de línea" : message);
     expect(searchSettings("ajuste", ITEMS, spanish).map((item) => item.id)).toEqual(["word-wrap"]);
-    for (const query of ["fallback", "fallback agent", "fallback model"]) {
-      expect(searchSettings(query)[0]).toMatchObject({
-        id: "fallback-model",
-        to: "/settings/threads",
-        scope: "environment-defaults",
-      });
-    }
   });
 
   it("shows the Secrets page in nav and search only when an environment enables secret providers", () => {
@@ -273,11 +266,6 @@ describe("settings search targets", () => {
     expect(isSettingsSearchScopeAvailable(updates.scope, "environment")).toBe(true);
     expect(isSettingsSearchScopeAvailable(updates.scope, "all")).toBe(true);
     expect(isSettingsSearchScopeAvailable(updates.scope, "project")).toBe(false);
-    const fallback = getSettingsSearchTargetScope("fallback-model")!;
-    expect(fallback.scope).toBe("environment-defaults");
-    expect(isSettingsSearchScopeAvailable(fallback.scope, "environment")).toBe(true);
-    expect(isSettingsSearchScopeAvailable(fallback.scope, "all")).toBe(true);
-    expect(isSettingsSearchScopeAvailable(fallback.scope, "project")).toBe(false);
     for (const id of ["response-streaming", "speech-project-dictionary"]) {
       expect(getSettingsSearchTargetScope(id)?.scope).toBe("project-defaults");
     }

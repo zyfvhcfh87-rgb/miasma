@@ -1,11 +1,25 @@
 import { UsageProviderKind } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import { getLocalStorageItem, setLocalStorageItem } from "../../hooks/useLocalStorage";
 
 const STORAGE_KEY = "t3code:usage-page-preferences:v1";
+const UsagePageMetricSchema = Schema.Literals(["cost", "tokens"]);
+const PersistedUsagePageMetricSchema = Schema.Union([
+  UsagePageMetricSchema,
+  Schema.Literal("limits"),
+]).pipe(
+  Schema.decodeTo(
+    UsagePageMetricSchema,
+    SchemaTransformation.transform({
+      decode: (metric) => (metric === "limits" ? "cost" : metric),
+      encode: (metric) => metric,
+    }),
+  ),
+);
 const UsagePagePreferencesSchema = Schema.Struct({
-  metric: Schema.Literals(["cost", "tokens"]),
+  metric: PersistedUsagePageMetricSchema,
   windowDays: Schema.Literals([1, 7, 30, 90]),
   hiddenProviders: Schema.optional(Schema.Array(UsageProviderKind)),
 });

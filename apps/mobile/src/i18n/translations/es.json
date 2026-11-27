@@ -4085,6 +4085,12 @@
   "224ab07f381051bf": "Finalizada",
   "2c7ebf843a3b1ae2": "Error",
   "342a892bf3b5424d": "Sin iniciar",
+  "fd7ccbd22673580a": "ChatGPT token sharing is active",
+  "4edecd89f212de98": "ChatGPT sharing is on",
+  "953380411ccc070e": "Eligible usage uses your ChatGPT plan. Credit settings and limits are managed in ChatGPT.",
+  "3dbc42464b2bfb20": "Fast and Ultrafast are unavailable with this ChatGPT connection. Use an existing Codex CLI login for speed options your account supports.",
+  "5c0eb4217bb673bd": "Using ChatGPT plan",
+  "6df4c22a9ae17336": "Manage usage",
   "8d9617edf6eee5b9": "No se pudo enviar la decisión de aprobación.",
   "97d6946415db6c16": [
     "Aprobación de ",
@@ -4975,6 +4981,16 @@
   "a6f6f92c132e0412": "Se ha descargado una versión nueva que se instala automáticamente la próxima vez que salgas de la app. ¿Instalarla ahora?",
   "b0d022fe9d78def7": "Más tarde",
   "9d3fd34ff062c44b": "Instalar ahora",
+  "7d72af75b2812d60": "{provider} on {environment}",
+  "6753deea17e91bf5": "ChatGPT shared usage",
+  "207a400af41d5310": [
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    ". Open ChatGPT with the account you connected."
+  ],
   "43e655305262c0c7": "Coste",
   "88151c994a23d697": "Tokens",
   "e4d8f24f51cb20b2": "24 h",

@@ -1,5 +1,6 @@
 import {
   latestExecutedRun,
+  latestRootProviderFailure,
   latestRootProviderFailureItem,
   latestUnheldRun,
   threadErrorSummary,
@@ -410,9 +411,15 @@ export function deriveResumableRunId(
     ThreadStructure,
     "runs" | "turnItems" | "attempts" | "providerTurns" | "providerThreads" | "providerSessions"
   >,
+  runtime: Pick<ThreadStructureRuntime, "lastErrorClass"> | null,
 ): RunId | null {
   const run = latestExecutedRun(projection.runs);
-  if (run?.status !== "interrupted") return null;
+  const resumable =
+    run?.status === "interrupted" ||
+    (run?.status === "failed" &&
+      runtime?.lastErrorClass === "usage_limit" &&
+      latestRootProviderFailure(run, projection.turnItems)?.class === "usage_limit");
+  if (!resumable) return null;
   // Without native resume the server can only resend a message the provider never received.
   if (
     runProviderSession(projection, run)?.capabilities.turns.supportsNativeResume === false &&
