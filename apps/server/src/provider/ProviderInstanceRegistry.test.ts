@@ -44,7 +44,6 @@ import * as ServerSettings from "../serverSettings.ts";
 import { ClaudeDriver, type ClaudeDriverEnv } from "./Drivers/ClaudeDriver.ts";
 import { CodexDriver, type CodexDriverEnv } from "./Drivers/CodexDriver.ts";
 import * as ModelManifest from "./ModelManifest.ts";
-import * as ResetCreditCoordinator from "./resetCreditCoordinator.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import { makeProviderInstanceRegistry } from "./ProviderInstanceRegistry.ts";
 import { ProviderDriverError } from "./Errors.ts";
@@ -66,7 +65,7 @@ const layerTestHttpClient = Layer.succeed(
 );
 
 // The mock CLIs from makeTildeProviderFixtures are scripts Windows cannot execute.
-const windowsHost = HostProcess.Platform.defaultValue() === "win32";
+const _windowsHost = HostProcess.Platform.defaultValue() === "win32";
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 
@@ -208,7 +207,6 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
     Layer.provideMerge(McpProviderSessions.layer),
     Layer.provideMerge(ProviderInstallationGate.layer),
     Layer.provideMerge(ModelManifest.layerTest),
-    Layer.provideMerge(ResetCreditCoordinator.layerTest),
   );
   const layerBase = ProviderHostLive.layer.pipe(Layer.provideMerge(layerBaseDeps));
   const layerTest = ProviderOrchestrationAdapterInfrastructure.layer.pipe(
@@ -594,7 +592,6 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       expect(effortLabels).toContain("Max");
       expect(effortLabels.some((label) => label.includes("capped"))).toBe(false);
       expect(snapshot.auth).toMatchObject({ status: "authenticated", email: "test@example.com" });
-      expect(snapshot.usageLimits?.windows[0]?.usedPercent).toBe(100);
     }).pipe(Effect.provide(layerTest)),
   );
 
@@ -637,12 +634,6 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
                 },
               });
             },
-            usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => ({
-              rate_limits_available: true,
-              rate_limits: {
-                five_hour: { utilization: 12, resets_at: "2026-07-18T14:39:00Z" },
-              },
-            }),
           }) as ReturnType<typeof ClaudeSdk.query>,
       );
       yield* Effect.addFinalizer(() => Effect.sync(() => query.mockRestore()));
@@ -670,7 +661,6 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         auth: { status: "authenticated", email: "account-a@example.com", workspaceId: "org-a" },
         slashCommands: expect.arrayContaining([expect.objectContaining({ name: "last-good" })]),
       });
-      expect(first.usageLimits?.unavailable).toBeUndefined();
       expect(probeCount).toBe(1);
 
       yield* TestClock.adjust("1 second");
@@ -688,7 +678,6 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         message: "Claude Agent CLI failed while checking account status.",
       });
       expect(accountChangedFailure.checkedAt).not.toBe(first.checkedAt);
-      expect(accountChangedFailure.usageLimits).toBeUndefined();
       expect(accountChangedFailure.slashCommands).not.toEqual(
         expect.arrayContaining([expect.objectContaining({ name: "last-good" })]),
       );
@@ -702,7 +691,6 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         auth: { status: "authenticated", email: "account-b@example.com", workspaceId: "org-b" },
         slashCommands: expect.arrayContaining([expect.objectContaining({ name: "recovered" })]),
       });
-      expect(recovered.usageLimits?.unavailable).toBeUndefined();
       const recoveredProbeCount = probeCount;
       expect(recoveredProbeCount).toBeGreaterThan(failedProbeCount);
 
@@ -715,8 +703,6 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         auth: { status: "authenticated", email: "account-b@example.com", workspaceId: "org-b" },
         slashCommands: expect.arrayContaining([expect.objectContaining({ name: "recovered" })]),
       });
-      expect(sameAccountFailure.usageLimits?.checkedAt).toBe(recovered.usageLimits?.checkedAt);
-      expect(sameAccountFailure.usageLimits?.windows).toEqual(recovered.usageLimits?.windows);
       const sameAccountFailureProbeCount = probeCount;
       expect(sameAccountFailureProbeCount).toBeGreaterThan(recoveredProbeCount);
 
@@ -732,171 +718,6 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       expect(probeCount).toBeGreaterThan(sameAccountFailureProbeCount);
     }).pipe(Effect.provide(layerTest)),
   );
-
-  const redeemClaudeReset = (claim: { result: string; usageFailsAfterClaim: boolean }) =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const fixtures = yield* makeTildeProviderFixtures();
-      const marker = path.join(fixtures.claudeHomePath, "redeemed");
-      yield* fs.writeFileString(
-        path.join(fixtures.claudeHomePath, ".credentials.json"),
-        '{"claudeAiOauth":{"accessToken":"fake-token"}}',
-      );
-      yield* fs.writeFileString(
-        path.join(fixtures.claudeHomePath, ".claude.json"),
-        '{"oauthAccount":{"organizationUuid":"fake-org"}}',
-      );
-      const client = HttpClient.make((request) =>
-        Effect.gen(function* () {
-          if (request.url.endsWith("/api/oauth/usage")) {
-            return HttpClientResponse.fromWeb(
-              request,
-              Response.json({
-                cedar_ember: {
-                  eligible: true,
-                  next_grant_id: "grant_a",
-                  grants: [{ id: "grant_a", resets_left: 1, usable_now: true }],
-                },
-              }),
-            );
-          }
-          if (request.url.endsWith("/reset_rate_limits")) {
-            yield* fs.writeFileString(marker, "redeemed").pipe(Effect.orDie);
-            return HttpClientResponse.fromWeb(request, Response.json({ result: claim.result }));
-          }
-          return HttpClientResponse.fromWeb(request, Response.json({ version: "0.0.0" }));
-        }),
-      );
-      const instanceId = ProviderInstanceId.make("claude_reset");
-      const { registry } = yield* makeProviderInstanceRegistry({
-        drivers: [ClaudeDriver],
-        configMap: {
-          [instanceId]: {
-            driver: ProviderDriverKind.make("claudeAgent"),
-            enabled: true,
-            environment: [
-              { name: "T3_CLAUDE_RESET_MARKER", value: marker, sensitive: false },
-              ...(claim.usageFailsAfterClaim
-                ? [{ name: "T3_CLAUDE_USAGE_FAILS_AFTER_CLAIM", value: "1", sensitive: false }]
-                : []),
-            ],
-            config: makeClaudeConfig({
-              enabled: true,
-              binaryPath: fixtures.claudeBinaryPath,
-              homePath: fixtures.claudeHomePath,
-            }),
-          },
-        },
-      }).pipe(Effect.provideService(HttpClient.HttpClient, client));
-      const instance = yield* registry.getInstance(instanceId);
-      expect(instance).toBeDefined();
-      const before = yield* instance!.snapshot.refresh;
-      expect(before.usageLimits?.windows[0]?.usedPercent).toBe(100);
-      expect(before.usageLimits?.resetCredits?.nextCreditId).toBe("grant_a");
-      const outcome = yield* instance!.consumeResetCredit!(undefined).pipe(Effect.result);
-      return { outcome, after: yield* instance!.snapshot.getSnapshot };
-    }).pipe(
-      // macOS logins live in the Keychain, where resets are never read.
-      Effect.provideService(HostProcess.Platform, "linux"),
-      Effect.provide(layerTest),
-    );
-
-  it.live.skipIf(windowsHost)("refreshes Claude usage after redeeming a reset", () =>
-    Effect.gen(function* () {
-      const { outcome, after } = yield* redeemClaudeReset({
-        result: "reset",
-        usageFailsAfterClaim: false,
-      });
-      expect(outcome).toMatchObject({ _tag: "Success", success: "reset" });
-      expect(after.usageLimits?.windows[0]?.usedPercent).toBe(0);
-    }),
-  );
-
-  it.live.skipIf(windowsHost)(
-    "reports Claude's answer when a claim changed nothing and the re-probe fails",
-    () =>
-      Effect.gen(function* () {
-        const { outcome } = yield* redeemClaudeReset({
-          result: "already_used",
-          usageFailsAfterClaim: true,
-        });
-        expect(outcome).toMatchObject({ _tag: "Success", success: "alreadyRedeemed" });
-      }),
-  );
-
-  const makeClaudeCacheFixture = Effect.fnUntraced(function* (
-    state: "ready" | "signed-out" | "usage-failed",
-  ) {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const fixtures = yield* makeTildeProviderFixtures();
-    const recovered = path.join(fixtures.claudeHomePath, "recovered");
-    const probeLog = path.join(fixtures.claudeHomePath, "probes.log");
-    const instanceId = ProviderInstanceId.make("claude_cache");
-    const { registry } = yield* makeProviderInstanceRegistry({
-      drivers: [ClaudeDriver],
-      configMap: {
-        [instanceId]: {
-          driver: ProviderDriverKind.make("claudeAgent"),
-          enabled: true,
-          environment: [
-            { name: "T3_CLAUDE_PROBE_LOG", value: probeLog, sensitive: false },
-            ...(state === "ready"
-              ? []
-              : [
-                  {
-                    name:
-                      state === "signed-out"
-                        ? "T3_CLAUDE_LOGIN_MARKER"
-                        : "T3_CLAUDE_USAGE_FAILS_UNTIL",
-                    value: recovered,
-                    sensitive: false,
-                  },
-                ]),
-          ],
-          config: makeClaudeConfig({
-            enabled: true,
-            binaryPath: fixtures.claudeBinaryPath,
-            homePath: fixtures.claudeHomePath,
-          }),
-        },
-      },
-    });
-    const instance = yield* registry.getInstance(instanceId);
-    expect(instance).toBeDefined();
-    return {
-      refresh: instance!.snapshot.refresh,
-      recover: fs.writeFileString(recovered, ""),
-      probeLog: fs.readFileString(probeLog),
-    };
-  });
-
-  for (const state of ["signed-out", "usage-failed"] as const) {
-    it.effect.skipIf(windowsHost)(
-      state === "signed-out"
-        ? "shows Claude usage on the first refresh after signing back in"
-        : "retries Claude usage on the first refresh after a failed usage read",
-      () =>
-        Effect.gen(function* () {
-          const fixture = yield* makeClaudeCacheFixture(state);
-          const before = yield* fixture.refresh;
-          if (state === "signed-out") {
-            expect(before.auth.status).toBe("unauthenticated");
-            expect(before.usageLimits).toBeUndefined();
-          } else {
-            expect(before.auth.status).toBe("authenticated");
-            expect(before.usageLimits?.unavailable?.reason).toBe("probeFailed");
-          }
-
-          yield* fixture.recover;
-          const after = yield* fixture.refresh;
-          expect(after.auth.status).toBe("authenticated");
-          expect(after.usageLimits?.unavailable).toBeUndefined();
-          expect(after.usageLimits?.windows.map((window) => window.id)).toEqual(["five_hour"]);
-        }).pipe(Effect.provide(layerTest)),
-    );
-  }
 
   it.effect(
     "shadows instances whose driver is not registered in this build without failing boot",

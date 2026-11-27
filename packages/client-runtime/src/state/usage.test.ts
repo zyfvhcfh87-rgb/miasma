@@ -8,10 +8,10 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import type { EnvironmentPresentation } from "../connection/presentation.ts";
-import { refreshUsage, refreshUsageLimits } from "./usage.ts";
+import { refreshUsage } from "./usage.ts";
 
 const input = {
   sinceDay: UsageDay.make("2026-09-05"),
@@ -194,21 +194,5 @@ describe("manual usage refresh", () => {
     await refreshing;
     expect(reads).toBe(2);
     unmount();
-  });
-});
-
-describe("limits refresh cooldown", () => {
-  it("shares an in-flight check and skips duplicate automatic refreshes", async () => {
-    const id = EnvironmentId.make("limits-in-flight");
-    const oldCheck = Promise.withResolvers<string>();
-    const first = refreshUsageLimits(id, () => oldCheck.promise, true);
-    const newCheck = vi.fn(async () => "new limits");
-    const manual = refreshUsageLimits(id, newCheck);
-    expect(await refreshUsageLimits(id, newCheck, true)).toBeUndefined();
-    expect(newCheck).not.toHaveBeenCalled();
-    oldCheck.resolve("old limits");
-    expect(await first).toBe("old limits");
-    expect(await manual).toBe("old limits");
-    expect(newCheck).not.toHaveBeenCalled();
   });
 });

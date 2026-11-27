@@ -1731,7 +1731,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     onRequest: (method: string, params: unknown) => Effect.Effect<void> = () => Effect.void,
     readChildMetadata?: Parameters<typeof withCodexReplayChildMetadata>[2],
     beforeEmitInbound?: CodexReplay.CodexAppServerReplayDriver["beforeEmitInbound"],
-    onUsageLimits?: CodexAdapterV2.CodexAdapterV2Options["onUsageLimits"],
     promptSuggestions: Effect.Effect<boolean> = Effect.succeed(false),
     onNotification: (method: string) => Effect.Effect<void> = () => Effect.void,
     models?: CodexAdapterV2.CodexAdapterV2Options["models"],
@@ -1797,7 +1796,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         settings: DEFAULT_CODEX_SETTINGS,
         environment: {},
         clientFactory,
-        ...(onUsageLimits ? { onUsageLimits } : {}),
         ...(models ? { models } : {}),
         digest: yield* Digest.Digest,
         fileSystem,
@@ -3092,7 +3090,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           (method) => Effect.sync(() => requests.push(method)),
           undefined,
           undefined,
-          undefined,
           Ref.get(enabled),
         );
         // The flag is read per turn: turning it off after the session opened stops sampling.
@@ -3222,7 +3219,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           entry.label === "wake-turn-1 thread/sample"
             ? Deferred.succeed(firstSampleAnswered, undefined).pipe(Effect.asVoid)
             : Effect.void,
-        undefined,
         Effect.succeed(true),
       );
       const turn = makeCodexTestTurnInput({
@@ -3321,7 +3317,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       });
       const harness = yield* makeCodexReplayHarness(
         transcript,
-        undefined,
         undefined,
         undefined,
         undefined,
@@ -4488,7 +4483,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 Effect.andThen(Deferred.succeed(restoreRequested, undefined)),
               )
             : Effect.void,
-        undefined,
         undefined,
         undefined,
         undefined,
@@ -8857,19 +8851,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
   );
 
   it.effect.each([
-    // regression: #27773 a first-request 429 only notifies the reset-less premium limit
-    {
-      name: "first-request-reset",
-      code: "usageLimitExceeded",
-      notification: false,
-      expectedClass: "usage_limit",
-    },
-    {
-      name: "newer-reset-during-read",
-      code: "usageLimitExceeded",
-      notification: false,
-      expectedClass: "usage_limit",
-    },
     {
       name: "replacement",
       code: "usageLimitExceeded",
@@ -8877,25 +8858,13 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       expectedClass: "provider_error",
     },
     {
-      name: "late-reset",
-      code: "usageLimitExceeded",
-      notification: false,
-      expectedClass: "usage_limit",
-    },
-    {
       name: "matching-details",
       code: "usageLimitExceeded",
       notification: true,
       expectedClass: "usage_limit",
     },
-    {
-      name: "deferred-reset",
-      code: "usageLimitExceeded",
-      notification: false,
-      expectedClass: "usage_limit",
-    },
     { name: "retry", code: "usageLimitExceeded", notification: true, expectedClass: "usage_limit" },
-    // A proxy such as CLIProxyAPI strips the snapshot, so only the error text carries the reset.
+    // Only the error text carries the reset.
     {
       name: "message-reset",
       code: "usageLimitExceeded",
@@ -8954,7 +8923,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       code: "other",
       details: "subscription_sharing_workplace_individual_usage_limit_exceeded",
       notification: true,
-      usedBefore: 100,
       expectedClass: "usage_limit",
       expectedCode: "subscription_sharing_workplace_individual_usage_limit_exceeded",
       expectedMessage: "workspace admin",
@@ -8967,7 +8935,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       message: CHATGPT_SHARING_LIMIT_MESSAGE,
       notification: true,
       willRetry: true,
-      usedBefore: 100,
       expectedClass: "usage_limit",
       expectedCode: "subscription_sharing_usage_limit_exceeded",
       expectedMessage: "Usage settings",
@@ -8978,7 +8945,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       errorInfo: { responseStreamDisconnected: { httpStatusCode: null } },
       message: CHATGPT_SHARING_LIMIT_MESSAGE,
       notification: false,
-      resetAfter: true,
       expectedClass: "usage_limit",
       expectedCode: "subscription_sharing_usage_limit_exceeded",
       expectedMessage: "Usage settings",
@@ -9088,113 +9054,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       const nativeTurnId = `turn-limit-${scenario.name}`;
       const message = "message" in scenario ? scenario.message : "Provider stopped this request.";
       const errorInfo = "errorInfo" in scenario ? scenario.errorInfo : scenario.code;
-      const resetAt = "2033-05-19T07:20:00.000Z";
-      const snapshot = {
-        type: "emit_inbound" as const,
-        label: "account/rateLimits/updated",
-        frame: {
-          method: "account/rateLimits/updated",
-          params: {
-            rateLimits: {
-              limitId: "codex",
-              primary: { usedPercent: 100, resetsAt: 2000100000, windowDurationMins: 300 },
-            },
-          },
-        },
-      };
-      const readsReset =
-        scenario.name === "first-request-reset" || scenario.name === "newer-reset-during-read";
-      // Usage limits with no known reset read the account before publishing their terminal.
-      const readsAccount =
-        scenario.expectedClass === "usage_limit" &&
-        !("expectedCode" in scenario) &&
-        scenario.name !== "deferred-reset";
-      const premium = {
-        ...snapshot,
-        frame: {
-          method: "account/rateLimits/updated",
-          params: { rateLimits: { limitId: "premium", primary: null, secondary: null } },
-        },
-      };
-      const newerSnapshot = {
-        ...snapshot,
-        frame: {
-          method: "account/rateLimits/updated",
-          params: {
-            rateLimits: {
-              limitId: "codex",
-              primary: { usedPercent: 100, resetsAt: 2000200000, windowDurationMins: 300 },
-            },
-          },
-        },
-      };
-      const readRequest = {
-        type: "expect_outbound" as const,
-        label: "account/rateLimits/read",
-        frame: { id: 4, method: "account/rateLimits/read", params: null },
-      };
       const transcript = makeCodexReplayTranscript({
         scenario: `codex-limit-${scenario.name}`,
         entries: [
           ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "Continue." }),
-          ...("usedBefore" in scenario
-            ? [
-                {
-                  ...snapshot,
-                  frame: {
-                    method: "account/rateLimits/updated",
-                    params: {
-                      rateLimits: {
-                        limitId: "codex",
-                        primary: {
-                          usedPercent: scenario.usedBefore,
-                          resetsAt: 2000100000,
-                          windowDurationMins: 300,
-                        },
-                      },
-                    },
-                  },
-                },
-              ]
-            : []),
-          ...(readsReset ? [premium] : []),
-          ...(scenario.name === "deferred-reset" ? [snapshot] : []),
-          ...(scenario.name === "deferred-reset"
-            ? [
-                {
-                  type: "emit_inbound" as const,
-                  label: "item/completed/subAgentActivity-started",
-                  frame: {
-                    method: "item/completed",
-                    params: {
-                      threadId: nativeThreadId,
-                      turnId: nativeTurnId,
-                      item: {
-                        type: "subAgentActivity",
-                        id: "limit-child-spawn",
-                        kind: "started",
-                        agentThreadId: "native-limit-child",
-                        agentPath: "/root/limit_child",
-                      },
-                    },
-                  },
-                },
-                {
-                  type: "emit_inbound" as const,
-                  label: "turn/started/child",
-                  frame: {
-                    method: "turn/started",
-                    params: {
-                      threadId: "native-limit-child",
-                      turn: makeCodexReplayTurn({
-                        id: "limit-child-turn",
-                        status: "inProgress",
-                      }),
-                    },
-                  },
-                },
-              ]
-            : []),
           ...(scenario.notification
             ? [
                 {
@@ -9278,94 +9141,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               },
             },
           },
-          ...(readsAccount ? [readRequest] : []),
-          ...(scenario.name === "newer-reset-during-read" ? [newerSnapshot] : []),
-          ...(readsReset
-            ? [
-                {
-                  type: "emit_inbound" as const,
-                  label: "account/rateLimits/read",
-                  frame: {
-                    id: 4,
-                    result: {
-                      ...premium.frame.params,
-                      rateLimitsByLimitId: { codex: snapshot.frame.params.rateLimits },
-                    },
-                  },
-                },
-              ]
-            : []),
-          ...(readsAccount && !readsReset
-            ? [
-                {
-                  type: "emit_inbound" as const,
-                  label: "account/rateLimits/read",
-                  frame: { id: 4, error: { code: -32600, message: "Not signed in." } },
-                },
-              ]
-            : []),
-          ...(scenario.name === "late-reset"
-            ? [{ ...snapshot, label: "account/rateLimits/updated/late" }]
-            : []),
-          ...("resetAfter" in scenario ? [snapshot] : []),
-          ...(scenario.name === "deferred-reset"
-            ? [
-                {
-                  ...snapshot,
-                  frame: {
-                    method: "account/rateLimits/updated",
-                    params: {
-                      rateLimits: {
-                        limitId: "codex",
-                        primary: {
-                          usedPercent: 100,
-                          resetsAt: 2000200000,
-                          windowDurationMins: 300,
-                        },
-                      },
-                    },
-                  },
-                },
-                {
-                  type: "emit_inbound" as const,
-                  label: "turn/completed/child",
-                  frame: {
-                    method: "turn/completed",
-                    params: {
-                      threadId: "native-limit-child",
-                      turn: makeCodexReplayTurn({
-                        id: "limit-child-turn",
-                        status: "completed",
-                      }),
-                    },
-                  },
-                },
-              ]
-            : []),
         ],
       });
-      const resetReceipt = yield* Deferred.make<void>();
-      const snapshotReceipt = yield* Deferred.make<void>();
-      const terminalReceipt = yield* Deferred.make<void>();
-      const harness = yield* makeCodexReplayHarness(
-        transcript,
-        (event) =>
-          event.type === "turn.terminal"
-            ? Deferred.succeed(terminalReceipt, undefined)
-            : event.type === "turn_item.updated" &&
-                event.turnItem.type === "error" &&
-                event.turnItem.failure.resetAt === resetAt
-              ? Deferred.succeed(resetReceipt, undefined)
-              : Effect.void,
-        undefined,
-        undefined,
-        // The late reset must land after the terminal its failed read released.
-        (entry) =>
-          entry.label === "account/rateLimits/updated/late"
-            ? Deferred.await(terminalReceipt)
-            : Effect.void,
-        () => Deferred.succeed(snapshotReceipt, undefined),
-      );
+      const harness = yield* makeCodexReplayHarness(transcript);
       yield* harness.runtime.startTurn(
         makeCodexTestTurnInput({
           threadId: harness.threadId,
@@ -9392,33 +9170,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             ),
           ),
         );
-      if (scenario.name === "deferred-reset" || scenario.name === "first-request-reset")
-        assert.equal(terminal.failure.resetAt, resetAt);
-      if (scenario.name === "newer-reset-during-read")
-        assert.equal(terminal.failure.resetAt, "2033-05-20T11:06:40.000Z");
       if (scenario.name === "matching-details")
         assert.equal(terminal.failure.message, "Detailed provider allowance explanation.");
-      if ("resetAfter" in scenario) {
-        yield* Deferred.await(snapshotReceipt);
-        assert.isFalse(
-          harness.events.some(
-            (event) =>
-              event.type === "turn_item.updated" &&
-              event.turnItem.type === "error" &&
-              event.turnItem.failure.resetAt != null,
-          ),
-        );
-      }
-      if (scenario.name === "late-reset") {
-        yield* Deferred.await(resetReceipt);
-        const item = harness.events.find(
-          (event) =>
-            event.type === "turn_item.updated" &&
-            event.turnItem.type === "error" &&
-            event.turnItem.failure.resetAt === resetAt,
-        );
-        assert.isDefined(item);
-      }
       if (scenario.name === "retry" || "willRetry" in scenario)
         assert.equal(terminal.retry?.attempt, 1);
       if ("expectedCode" in scenario && "expectedMessage" in scenario) {

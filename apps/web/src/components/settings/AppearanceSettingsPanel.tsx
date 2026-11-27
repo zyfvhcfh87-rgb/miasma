@@ -544,14 +544,12 @@ export function AppearanceSettingsPanel() {
           />
           <SettingsRow
             {...searchableSetting("composer-usage-meter")}
-            description={gt(
-              "Show remaining provider usage limits or today's spend below the composer.",
-            )}
+            description={gt("Show today's spend below the composer.")}
             resetAction={
               settings.showComposerUsageMeter !==
               DEFAULT_UNIFIED_SETTINGS.showComposerUsageMeter ? (
                 <SettingResetButton
-                  ariaLabel={gt("Reset composer usage limits to default")}
+                  ariaLabel={gt("Reset composer usage meter to default")}
                   onClick={() =>
                     updateSettings({
                       showComposerUsageMeter: DEFAULT_UNIFIED_SETTINGS.showComposerUsageMeter,
@@ -566,7 +564,7 @@ export function AppearanceSettingsPanel() {
                 onCheckedChange={(checked) =>
                   updateSettings({ showComposerUsageMeter: Boolean(checked) })
                 }
-                aria-label={gt("Show usage limits below the composer")}
+                aria-label={gt("Show usage meter below the composer")}
               />
             }
           />

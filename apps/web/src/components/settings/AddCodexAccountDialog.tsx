@@ -9,7 +9,7 @@ import {
 } from "@t3tools/contracts";
 import { T, useGT } from "gt-react";
 import { useState, type ReactNode } from "react";
-import { usesChatGptSharing } from "@t3tools/shared/usageLimits";
+import { usesChatGptSharing } from "@t3tools/shared/chatGptSharing";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { randomUUID } from "../../lib/utils";

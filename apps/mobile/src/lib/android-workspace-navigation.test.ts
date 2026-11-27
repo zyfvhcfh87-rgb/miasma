@@ -40,7 +40,6 @@ const options = {
     "SettingsAppearance",
     "SettingsOpenSourceLicenses",
     "SettingsUsage",
-    "SettingsUsageAccount",
   ],
   routeParamList: {},
   routeGetIdList: {},

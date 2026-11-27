@@ -50,28 +50,9 @@ import {
   type ServerProviderDraft,
 } from "@t3tools/provider-core/server/snapshotProbe";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
-import { makeUnavailableUsageLimits } from "@t3tools/provider-core/server/usageLimits";
-import {
-  codexRateLimitsFailureMessage,
-  codexRateLimitsToLimits,
-  type CodexRateLimitSnapshot,
-  type CodexResetCreditsSummary,
-} from "./codexUsageLimits.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import packageJson from "../../package.json" with { type: "json" };
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
-
-type CodexRateLimitsProbe =
-  | {
-      readonly snapshot: CodexRateLimitSnapshot;
-      readonly rateLimitsByLimitId?:
-        | Readonly<Record<string, CodexRateLimitSnapshot>>
-        | null
-        | undefined;
-      readonly resetCredits: CodexResetCreditsSummary | null | undefined;
-      readonly accountId?: string | null | undefined;
-    }
-  | { readonly failure: string };
 
 const CodexRoutingConfig = Schema.Struct({
   model_provider: Schema.optionalKey(Schema.NullOr(Schema.String)),
@@ -121,20 +102,13 @@ function routesToNativeOpenai(config: unknown): boolean {
 }
 
 /** The origin of the custom endpoint Codex sends model requests to, if it uses one. */
-export function codexCustomEndpoint(config: unknown): string | undefined {
+function codexCustomEndpoint(config: unknown): string | undefined {
   const baseUrl = codexRouteBaseUrl(config);
   const url = baseUrl ? URL.parse(baseUrl) : null;
   return url && /^https?:$/.test(url.protocol) && !routesToNativeOpenai(config)
     ? url.origin
     : undefined;
 }
-
-// A stored login does not mean this provider's traffic spends that login's quota.
-export const codexRoutesSpendNativeQuota = (
-  account: CodexSchema.V2GetAccountResponse,
-  config: unknown,
-): boolean =>
-  account.requiresOpenaiAuth && account.account?.type !== "apiKey" && routesToNativeOpenai(config);
 
 const CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER = "2 seconds" as const;
 const CODEX_CATALOG_REFRESH_TIMEOUT_MS = 3_000;
@@ -157,8 +131,6 @@ const CODEX_PRESENTATION = {
 export interface CodexAppServerProviderSnapshot {
   readonly account: CodexSchema.V2GetAccountResponse;
   readonly endpoint?: string | undefined;
-  readonly nativeUsage?: boolean;
-  readonly rateLimits?: CodexRateLimitsProbe;
   readonly version: string | undefined;
   readonly models: ReadonlyArray<ServerProviderModel> | undefined;
   readonly serviceTier?: string | undefined;
@@ -195,20 +167,16 @@ function reasoningEffortLabel(reasoningEffort: string): string {
   return REASONING_EFFORT_LABELS[reasoningEffort] ?? reasoningEffort;
 }
 
-function codexAccountAuthLabel(
-  account: CodexSchema.V2GetAccountResponse["account"],
-  usagePlanType: string | null | undefined,
-) {
+function codexAccountAuthLabel(account: CodexSchema.V2GetAccountResponse["account"]) {
   if (!account) return undefined;
   if (account.type === "apiKey") return "OpenAI API Key";
   if (account.type === "amazonBedrock") return "Amazon Bedrock";
   if (account.type !== "chatgpt") return undefined;
-  // account/read takes the plan from the cached login token; the usage read asks the backend.
-  const usageLabel = usagePlanType === "unknown" ? undefined : codexPlanLabel(usagePlanType);
-  return usageLabel ?? codexPlanLabel(account.planType);
+  // account/read takes the plan from the cached login token.
+  return codexPlanLabel(account.planType);
 }
 
-export function codexPlanLabel(planType: string | null | undefined): string | undefined {
+function codexPlanLabel(planType: string | null | undefined): string | undefined {
   switch (planType) {
     case "free":
       return "ChatGPT Free Subscription";
@@ -638,7 +606,7 @@ const codexProcessEnvironment = Effect.fn("codexProcessEnvironment")(function* (
   };
 });
 
-export const withCodexAppServerClient = Effect.fn("withCodexAppServerClient")(function* (input: {
+const withCodexAppServerClient = Effect.fn("withCodexAppServerClient")(function* (input: {
   readonly binaryPath: string;
   readonly homePath?: string | undefined;
   readonly launchArgs?: string | undefined;
@@ -702,30 +670,6 @@ const stopCodexAfterStartupWork = (pid: number, processScope: Scope.Closeable) =
     Effect.ensuring(Scope.close(processScope, Exit.void)),
   );
 
-// Usage is an enrichment: a failure or a slow answer degrades to "no usage this
-// probe" rather than costing the account and models.
-const readCodexRateLimits = (
-  client: CodexClient.CodexAppServerClient["Service"],
-  deadlineMs: number,
-) =>
-  withCodexDiscoveryDeadline(client.request("account/rateLimits/read", null), deadlineMs).pipe(
-    Effect.map((response): CodexRateLimitsProbe =>
-      response
-        ? {
-            snapshot: response.rateLimits,
-            rateLimitsByLimitId: response.rateLimitsByLimitId,
-            resetCredits: response.rateLimitResetCredits,
-            accountId: response.accountId,
-          }
-        : { failure: "Codex did not answer the usage request." },
-    ),
-    Effect.catch((error) =>
-      Effect.logDebug("Codex rate-limit read failed.", { cause: error }).pipe(
-        Effect.as<CodexRateLimitsProbe>({ failure: codexRateLimitsFailureMessage(error) }),
-      ),
-    ),
-  );
-
 const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(function* (input: {
   readonly probeTimeoutMs: number;
   readonly binaryPath: string;
@@ -733,7 +677,6 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   readonly launchArgs?: string;
   readonly cwd: string;
   readonly environment?: NodeJS.ProcessEnv;
-  readonly skipNativeUsage?: boolean;
 }) {
   const spawnedAtMs = DateTime.toEpochMillis(yield* DateTime.now);
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -768,7 +711,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
 
   // Optional discovery must finish before the outer timeout can discard the account result.
   const deadlineMs = spawnedAtMs + input.probeTimeoutMs - CODEX_DISCOVERY_MARGIN_MS;
-  const [skillsResponse, models, { config, nativeUsage, rateLimits }] = yield* Effect.all(
+  const [skillsResponse, models, configResponse] = yield* Effect.all(
     [
       withCodexDiscoveryDeadline(client.request("skills/list", { cwds: [input.cwd] }), deadlineMs),
       accountResponse.account?.type === "chatgpt"
@@ -786,34 +729,16 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
         CODEX_CONFIG_PROBE_TIMEOUT_MS,
       ).pipe(
         Effect.catch(() => Effect.logDebug("Codex config read failed.").pipe(Effect.as(undefined))),
-        Effect.flatMap((config) => {
-          // Only a confirmed native route may probe or publish the login's quota.
-          const nativeUsage =
-            !input.skipNativeUsage &&
-            config !== undefined &&
-            codexRoutesSpendNativeQuota(accountResponse, config.config);
-          const readUsage: Effect.Effect<CodexRateLimitsProbe | undefined> = nativeUsage
-            ? readCodexRateLimits(client, deadlineMs)
-            : Effect.undefined;
-          return readUsage.pipe(
-            Effect.map((rateLimits) => ({
-              config: config?.config,
-              nativeUsage,
-              rateLimits,
-            })),
-          );
-        }),
       ),
     ],
     { concurrency: "unbounded" },
   );
 
+  const config = configResponse?.config;
   const cyberAccess = Option.getOrUndefined(decodeCodexCyberAccessConfig(config));
   return {
     account: accountResponse,
     endpoint: config ? codexCustomEndpoint(config) : undefined,
-    nativeUsage,
-    ...(rateLimits ? { rateLimits } : {}),
     version,
     models,
     serviceTier: config?.service_tier ?? undefined,
@@ -970,26 +895,20 @@ const makePendingCodexProvider = Effect.fn("CodexProvider.makePendingCodexProvid
 const quotePath = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 
 function accountProbeStatus(
-  { account, rateLimits }: CodexAppServerProviderSnapshot,
+  { account }: CodexAppServerProviderSnapshot,
   codexHome: string | undefined,
 ): {
   readonly status: Exclude<ServerProviderState, "disabled">;
   readonly auth: ServerProvider["auth"];
   readonly message?: string;
 } {
-  const authLabel = codexAccountAuthLabel(
-    account.account,
-    rateLimits && "snapshot" in rateLimits ? rateLimits.snapshot.planType : undefined,
-  );
+  const authLabel = codexAccountAuthLabel(account.account);
   const authEmail = codexAccountEmail(account.account);
-  const workspaceId =
-    rateLimits && "accountId" in rateLimits ? rateLimits.accountId?.trim() : undefined;
   const auth = {
     status: account.account ? ("authenticated" as const) : ("unknown" as const),
     ...(account.account?.type ? { type: account.account?.type } : {}),
     ...(authLabel ? { label: authLabel } : {}),
     ...(authEmail ? { email: authEmail } : {}),
-    ...(workspaceId ? { workspaceId } : {}),
   } satisfies ServerProvider["auth"];
 
   if (account.account) {
@@ -1018,7 +937,6 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     readonly launchArgs?: string;
     readonly cwd: string;
     readonly environment?: NodeJS.ProcessEnv;
-    readonly skipNativeUsage?: boolean;
   }) => Effect.Effect<
     CodexAppServerProviderSnapshot,
     CodexErrors.CodexAppServerError,
@@ -1064,7 +982,6 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     launchArgs: resolveCodexLaunchArgs(codexSettings.launchArgs, resolvedEnvironment),
     cwd: process.cwd(),
     environment: resolvedEnvironment,
-    ...(managedAuth ? { skipNativeUsage: true } : {}),
   }).pipe(
     // Process teardown can outlast the work budget without discarding a completed snapshot.
     Effect.timeoutOption(Duration.millis(probeTimeoutMs)),
@@ -1130,24 +1047,6 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
           ? expandHomePath(codexSettings.homePath, yield* HostProcess.HomeDirectory)
           : undefined,
       );
-  // Sign-in guidance still applies when Codex itself says it needs an OpenAI login.
-  const usageLimits =
-    !snapshot.nativeUsage && !accountStatus.message
-      ? makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" })
-      : snapshot.rateLimits === undefined || "failure" in snapshot.rateLimits
-        ? makeUnavailableUsageLimits({
-            checkedAt,
-            reason: "probeFailed",
-            ...(accountStatus.message ? { message: accountStatus.message } : {}),
-            ...(snapshot.rateLimits ? { message: snapshot.rateLimits.failure } : {}),
-          })
-        : codexRateLimitsToLimits({
-            snapshot: snapshot.rateLimits.snapshot,
-            rateLimitsByLimitId: snapshot.rateLimits.rateLimitsByLimitId,
-            resetCredits: snapshot.rateLimits.resetCredits,
-            checkedAt,
-          });
-
   return buildServerProvider({
     presentation: CODEX_PRESENTATION,
     enabled: codexSettings.enabled,
@@ -1184,7 +1083,6 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
         : snapshot.models === undefined
           ? { message: "Codex did not return its model catalog in time." }
           : {}),
-      ...(managedAuth ? {} : { usageLimits }),
     },
   });
 });

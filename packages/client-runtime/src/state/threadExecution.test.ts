@@ -17,7 +17,6 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { createModelCapabilities, createModelSelection } from "@t3tools/shared/model";
-import { usageLimitBlockedRun } from "@t3tools/shared/orchestrationV2ThreadError";
 import { describe, expect, it } from "vite-plus/test";
 
 import { v2Projection } from "./orchestrationV2TestFixtures.ts";
@@ -223,6 +222,18 @@ describe("thread execution presentation", () => {
     );
     expect(deriveResumableRunId(projection, deriveThreadRuntime(projection))).toBe(failed.id);
     expect(
+      deriveResumableRunId(
+        {
+          ...projection,
+          turnItems: [{ ...item, failure: { ...item.failure, class: "provider_error" as const } }],
+        },
+        deriveThreadRuntime({
+          ...projection,
+          turnItems: [{ ...item, failure: { ...item.failure, class: "provider_error" as const } }],
+        }),
+      ),
+    ).toBeNull();
+    expect(
       deriveThreadRuntime({
         ...projection,
         turnItems: [{ ...item, nodeId: NodeId.make("child") }],
@@ -284,68 +295,6 @@ describe("thread execution presentation", () => {
       deriveThreadRuntime({ ...v2Projection, runs: [run("prompt", 1, "running")] })
         ?.activityStartedAt,
     ).toBe("2026-07-28T10:00:00.000Z");
-  });
-
-  it("keeps a subscription limit visible while later messages stay queued", () => {
-    const failed = {
-      ...run("limited", 1, "failed"),
-      rootNodeId: NodeId.make("root"),
-      completedAt: now,
-    };
-    const queued = run("queued", 2, "queued");
-    const item = {
-      id: TurnItemId.make("limit-error"),
-      threadId: v2Projection.thread.id,
-      runId: failed.id,
-      nodeId: failed.rootNodeId,
-      providerThreadId: null,
-      providerTurnId: null,
-      nativeItemRef: null,
-      parentItemId: null,
-      ordinal: 1,
-      type: "error" as const,
-      status: "failed" as const,
-      title: "Usage limit reached",
-      startedAt: now,
-      completedAt: now,
-      updatedAt: now,
-      failure: {
-        class: "usage_limit" as const,
-        message: "Plan limit reached",
-        code: "usageLimitExceeded",
-        retryable: null,
-      },
-    };
-    const projection = { ...v2Projection, runs: [failed, queued], turnItems: [item] };
-
-    expect(deriveLatestThreadRun(projection)?.runId).toBe(failed.id);
-    expect(deriveThreadActivityRun(projection)?.runId).toBe(failed.id);
-    expect(deriveThreadRuntime(projection)).toMatchObject({
-      status: "failed",
-      lastError: "Plan limit reached",
-      lastErrorClass: "usage_limit",
-    });
-    expect(deriveResumableRunId(projection, deriveThreadRuntime(projection))).toBe(failed.id);
-    const cancelledQueued = {
-      ...run("cancelled-queued", 3, "cancelled"),
-      startedAt: null,
-      completedAt: now,
-    };
-    expect(
-      usageLimitBlockedRun([failed, queued, cancelledQueued], projection.turnItems, null)?.id,
-    ).toBe(failed.id);
-    expect(
-      deriveThreadRuntime({ ...projection, runs: [failed, queued, cancelledQueued] }),
-    ).toMatchObject({ status: "failed", lastErrorClass: "usage_limit" });
-    const providerError = {
-      ...projection,
-      turnItems: [{ ...item, failure: { ...item.failure, class: "provider_error" as const } }],
-    };
-    expect(deriveThreadRuntime(providerError)).toMatchObject({
-      status: "queued",
-      lastErrorClass: null,
-    });
-    expect(deriveResumableRunId(providerError, deriveThreadRuntime(providerError))).toBeNull();
   });
 
   it("keeps live activity attached to an executing run when a newer run is queued", () => {

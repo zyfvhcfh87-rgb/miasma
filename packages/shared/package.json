@@ -427,9 +427,9 @@
       "types": "./src/usageFormat.ts",
       "import": "./src/usageFormat.ts"
     },
-    "./usageLimits": {
-      "types": "./src/usageLimits.ts",
-      "import": "./src/usageLimits.ts"
+    "./chatGptSharing": {
+      "types": "./src/chatGptSharing.ts",
+      "import": "./src/chatGptSharing.ts"
     },
     "./desktopAppControl": {
       "types": "./src/desktopAppControl.ts",
@@ -622,10 +622,6 @@
     "./pinOrderKey": {
       "types": "./src/pinOrderKey.ts",
       "import": "./src/pinOrderKey.ts"
-    },
-    "./usageLimitsCopy": {
-      "types": "./src/usageLimitsCopy.ts",
-      "import": "./src/usageLimitsCopy.ts"
     },
     "./usageFormatCopy": {
       "types": "./src/usageFormatCopy.ts",

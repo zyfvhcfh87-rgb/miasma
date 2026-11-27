@@ -231,15 +231,6 @@ it.layer(NodeServices.layer)("Muse text generation", (it) => {
       const message = "API error 429: raw provider text";
       const cases = [
         {
-          error: { kind: "modelError", quota: { limitKind: "tierLimit", resetsAtMs: 1 } },
-          detail: "Muse Code usage limit reached. Try again after it resets.",
-        },
-        {
-          // Credential proxies can refuse with a 429 quota message and no quota object.
-          error: { kind: "modelError", message: "upstream 429: quota exceeded for this key" },
-          detail: "Muse Code usage limit reached. Try again after it resets.",
-        },
-        {
           error: { kind: "authRequired" },
           detail: "Muse Code is not signed in. Run `muse login` on this T3 server host.",
         },
@@ -251,10 +242,6 @@ it.layer(NodeServices.layer)("Muse text generation", (it) => {
           error: { kind: "stepLimit" },
           detail:
             "Muse Code text generation failed. Check Muse login and availability on this T3 server host.",
-        },
-        {
-          reason: "upstream 429: quota exceeded for this key",
-          detail: "Muse Code usage limit reached. Try again after it resets.",
         },
         {
           reason: "raw provider refusal",

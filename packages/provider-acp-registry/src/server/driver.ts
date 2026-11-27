@@ -25,7 +25,6 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
@@ -73,7 +72,6 @@ import {
   makeAcpRegistryLearnedModelOptionsStore,
   withAcpRegistryLearnedModelOptions,
 } from "./learnedModelOptions.ts";
-import { isMistralVibeSettings, readMistralVibeUsageLimits } from "./mistralUsageLimits.ts";
 
 const DRIVER_KIND = ProviderDriverKind.make("acpRegistry");
 const decodeSettings = Schema.decodeSync(AcpRegistrySettings);
@@ -665,8 +663,6 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const hostEnvironment = yield* HostProcess.Environment;
-    const hostHomeDirectory = yield* Effect.serviceOption(HostProcess.HomeDirectory);
-    const httpClient = yield* Effect.serviceOption(HttpClient.HttpClient);
     const host = yield* ProviderHost.ProviderHost;
     const continuationIdentity = defaultProviderContinuationIdentity({
       driverKind: DRIVER_KIND,
@@ -830,26 +826,6 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       generation: current.generation + 1,
       entry: null,
     }));
-    const attachMistralUsageLimits = (provider: ServerProvider): Effect.Effect<ServerProvider> => {
-      if (!isMistralVibeSettings(effectiveConfig) || !provider.enabled || !provider.installed) {
-        return Effect.succeed(provider);
-      }
-      let probe = readMistralVibeUsageLimits(processEnvironment).pipe(
-        Effect.provideService(FileSystem.FileSystem, fileSystem),
-        Effect.provideService(Path.Path, path),
-      );
-      if (Option.isSome(hostHomeDirectory)) {
-        probe = Effect.provideService(probe, HostProcess.HomeDirectory, hostHomeDirectory.value);
-      }
-      if (Option.isSome(httpClient)) {
-        probe = Effect.provideService(probe, HttpClient.HttpClient, httpClient.value);
-      }
-      return probe.pipe(
-        Effect.map((usageLimits) =>
-          usageLimits === undefined ? provider : { ...provider, usageLimits },
-        ),
-      );
-    };
     const enrichProviderCached = Effect.fn("AcpRegistryDriver.enrichProviderCached")(function* (
       baseSnapshot: ServerProvider,
       publish: (enriched: {
@@ -869,12 +845,8 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
           now,
         )
       ) {
-        const provider = yield* attachMistralUsageLimits({
-          ...cached.provider,
-          checkedAt: baseSnapshot.checkedAt,
-        });
         return {
-          provider,
+          provider: { ...cached.provider, checkedAt: baseSnapshot.checkedAt },
           generation: cacheState.generation,
         };
       }
@@ -903,7 +875,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         remember(provider).pipe(
           Effect.andThen(publish({ provider, generation: cacheState.generation })),
         ),
-      ).pipe(Effect.flatMap(attachMistralUsageLimits));
+      );
       yield* remember(enriched);
       return { provider: enriched, generation: cacheState.generation };
     });

@@ -21,7 +21,6 @@ import {
   type MuseSdkHost,
 } from "./sdk.ts";
 import { museModelCapabilities, resolveMuseReasoningEffort } from "./modelCatalog.ts";
-import { isMuseUsageLimitFailure } from "./usageLimits.ts";
 import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textGeneration";
 import {
   generatedThreadTitle,
@@ -56,7 +55,6 @@ const ItemNotification = Schema.Struct({
 const TurnError = Schema.Struct({
   kind: Schema.optionalKey(Schema.String),
   message: Schema.String,
-  quota: Schema.optionalKey(Schema.Unknown),
 });
 const TurnCompleted = Schema.Struct({
   sessionId: Schema.String,
@@ -99,9 +97,6 @@ const isMuseTurnFailure = Schema.is(MuseTurnFailure);
 function museFailureDetail(cause: unknown): string {
   const error =
     isMuseSdkError(cause) && isMuseTurnFailure(cause.cause) ? cause.cause.turnError : undefined;
-  // Muse sends `quota` only for quota exhaustion, which it still labels `modelError`.
-  if (error?.quota !== undefined || isMuseUsageLimitFailure(error?.message))
-    return "Muse Code usage limit reached. Try again after it resets.";
   if (error?.kind === "authRequired")
     return "Muse Code is not signed in. Run `muse login` on this T3 server host.";
   if (error?.kind === "modelError")

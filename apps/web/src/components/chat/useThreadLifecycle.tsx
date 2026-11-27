@@ -107,8 +107,6 @@ interface ThreadLifecycleInput {
   readonly threadDetailRef: ScopedThreadRef | null;
   readonly activeThreadKey: string | null;
   readonly activeThreadShell: EnvironmentThreadShell | null;
-  /** The usage-limit recovery banner shows this snooze and its Wake now. */
-  readonly limitRecoveryHoldsSnooze: boolean;
   readonly activeLatestRun: EnvironmentThreadShell["latestRun"];
   readonly activeProjectCwd: string | null;
   readonly serverConfig: EnvironmentServerConfig | null;
@@ -131,7 +129,6 @@ interface ThreadLifecycleInput {
   readonly sendInFlightRef: { current: boolean };
   readonly setOptimisticUserMessages: Dispatch<SetStateAction<ChatMessage[]>>;
   readonly setThreadError: ReturnType<typeof makeThreadErrorSetter>;
-  readonly clearUsageLimitsFor: (threadKey: string) => void;
   readonly beginLocalDispatch: LocalDispatchState["beginLocalDispatch"];
   readonly resetLocalDispatch: LocalDispatchState["resetLocalDispatch"];
   readonly scrollToEnd: (animated?: boolean) => void;
@@ -163,7 +160,6 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     activeThreadKey,
     activeThreadShell,
     activeLatestRun,
-    limitRecoveryHoldsSnooze,
     activeProjectCwd,
     serverConfig,
     runtimeMode,
@@ -181,7 +177,6 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     sendInFlightRef,
     setOptimisticUserMessages,
     setThreadError,
-    clearUsageLimitsFor,
     beginLocalDispatch,
     resetLocalDispatch,
     scrollToEnd,
@@ -287,25 +282,10 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
       return;
     const threadKey = scopedThreadKey(activeThreadRef);
     setUnsnoozingThreadKey(threadKey);
-    // Commands settle into a result, so this always runs.
-    const recovery = activeThreadShell?.limitRecovery;
-    const recoveryOwnsSnooze =
-      recovery?.snooze === true &&
-      recovery.runId === activeThreadShell?.latestRun?.runId &&
-      activeThreadShell?.snoozedUntil != null &&
-      Date.parse(activeThreadShell.snoozedUntil) === Date.parse(recovery.resetAt);
-    const result = recoveryOwnsSnooze
-      ? await updateThreadMetadata({
-          environmentId: activeThreadRef.environmentId,
-          input: {
-            threadId: activeThreadRef.threadId,
-            limitRecovery: { runId: recovery.runId, resetAt: recovery.resetAt, snooze: false },
-          },
-        })
-      : await unsnoozeThreadMutation({
-          environmentId: activeThreadRef.environmentId,
-          input: { threadId: activeThreadRef.threadId, reason: "user" },
-        });
+    const result = await unsnoozeThreadMutation({
+      environmentId: activeThreadRef.environmentId,
+      input: { threadId: activeThreadRef.threadId, reason: "user" },
+    });
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);
       toastManager.add(
@@ -597,8 +577,6 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
         const error = squashAtomCommandFailure(result);
         setThreadError(threadId, thrownErrorMessage(error, m) ?? failureMessage);
       }
-    } else {
-      clearUsageLimitsFor(routeThreadKey);
     }
     sendInFlightRef.current = false;
   };
@@ -659,20 +637,18 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
       ? snoozeWakeLabel(snoozedUntil, { now: snoozeNow }, messages)
       : null;
   const threadStatusLine = activeThreadSnoozed ? (
-    limitRecoveryHoldsSnooze ? null : (
-      <ThreadStatusLine
-        icon={<AlarmClockIcon />}
-        label={
-          snoozeWake
-            ? gt("Snoozed, {remaining} left", { remaining: snoozeWake })
-            : gt("Snoozed", { $context: "thread status" })
-        }
-        clockMinute={nowMinute}
-        actionLabel={isUnsnoozing ? gt("Waking...") : gt("Wake now")}
-        actionDisabled={!canOperateThread || isUnsnoozing}
-        onAction={() => void handleUnsnoozeActiveThreadStable()}
-      />
-    )
+    <ThreadStatusLine
+      icon={<AlarmClockIcon />}
+      label={
+        snoozeWake
+          ? gt("Snoozed, {remaining} left", { remaining: snoozeWake })
+          : gt("Snoozed", { $context: "thread status" })
+      }
+      clockMinute={nowMinute}
+      actionLabel={isUnsnoozing ? gt("Waking...") : gt("Wake now")}
+      actionDisabled={!canOperateThread || isUnsnoozing}
+      onAction={() => void handleUnsnoozeActiveThreadStable()}
+    />
   ) : activeThreadSettled ? (
     <ThreadStatusLine
       icon={<CheckCircle2Icon />}

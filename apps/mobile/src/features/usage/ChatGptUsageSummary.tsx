@@ -1,8 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId } from "@t3tools/contracts";
-import { CHATGPT_USAGE_URL } from "@t3tools/shared/usageLimits";
-import { collectExternalUsageLinks } from "@t3tools/shared/usageLimitsCopy";
-import { T, useMessages, Var } from "gt-react-native";
+import { isProviderAvailable, type EnvironmentId } from "@t3tools/contracts";
+import { CHATGPT_USAGE_URL, usesChatGptSharing } from "@t3tools/shared/chatGptSharing";
+import { msg, T, useMessages, Var } from "gt-react-native";
 import { Pressable, View } from "react-native";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { AppText as Text } from "../../components/ui/AppText";
@@ -15,15 +14,31 @@ export function ChatGptUsageSummary({
   selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null;
 }) {
   const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
-  const m = useMessages();
-  const selected =
-    selectedEnvironmentIds === null
-      ? presentations
-      : new Map([...presentations].filter(([id]) => selectedEnvironmentIds.has(id)));
-  const usage = collectExternalUsageLinks(selected, m).find(
-    (link) => link.url === CHATGPT_USAGE_URL,
-  );
-  if (!usage) return null;
+  const resolve = useMessages();
+  const accountLabels = new Set<string>();
+  for (const [environmentId, presentation] of presentations) {
+    if (selectedEnvironmentIds !== null && !selectedEnvironmentIds.has(environmentId)) continue;
+    for (const provider of presentation.serverConfig?.providers ?? []) {
+      if (
+        !provider.enabled ||
+        !provider.installed ||
+        !isProviderAvailable(provider) ||
+        !usesChatGptSharing(provider)
+      ) {
+        continue;
+      }
+      accountLabels.add(
+        resolve(
+          msg("{provider} on {environment}", {
+            provider: provider.displayName ?? provider.instanceId,
+            environment: presentation.entry.target.label,
+          }),
+        ),
+      );
+    }
+  }
+  const accounts = [...accountLabels];
+  if (accounts.length === 0) return null;
   return (
     <View className="gap-1">
       <View className="flex-row items-center justify-between gap-3">
@@ -36,7 +51,7 @@ export function ChatGptUsageSummary({
         <Pressable
           accessibilityRole="link"
           className="min-h-11 justify-center"
-          onPress={() => void tryOpenExternalUrl(usage.url)}
+          onPress={() => void tryOpenExternalUrl(CHATGPT_USAGE_URL)}
         >
           <Text className="text-sm font-t3-medium text-primary">
             <T>Manage usage</T>
@@ -45,7 +60,7 @@ export function ChatGptUsageSummary({
       </View>
       <Text className="text-xs text-foreground-muted">
         <T>
-          <Var>{usage.accounts.join(", ")}</Var>. Open ChatGPT with the account you connected.
+          <Var>{accounts.join(", ")}</Var>. Open ChatGPT with the account you connected.
         </T>
       </Text>
     </View>

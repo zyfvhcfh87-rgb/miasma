@@ -17,13 +17,7 @@ import {
   type MessageId,
   type ModelSelection,
   type ServerConfig as T3ServerConfig,
-  type UsageLimitsReport,
 } from "@t3tools/contracts";
-import {
-  collectProviderUsageLimits,
-  hasProviderUsageLimits,
-  isUsageLimitsCommand,
-} from "@t3tools/shared/usageLimits";
 import { StackActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import { msg, T, useGT, useMessages } from "gt-react-native";
 import type { ReactNode } from "react";
@@ -188,7 +182,6 @@ export interface ThreadComposerProps {
     followUp?: ActiveTurnComposerAction,
     stillSendable?: () => boolean,
   ) => Promise<MessageId | null>;
-  readonly onShowUsageLimits: (report: UsageLimitsReport | null) => void;
   readonly canSwitchProvider: boolean;
   readonly onHeightChange?: (height: number) => void;
   readonly onEditorFocusChange?: (focused: boolean) => void;
@@ -366,20 +359,12 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       draftKey: composerDraftKey,
     });
   };
-  const { onSendMessage, onChangeDraftMessage, onShowUsageLimits } = props;
-  const usageLimitsOffered =
-    selectedProviderStatus !== null &&
-    hasProviderUsageLimits(
-      selectedProviderStatus.driver,
-      props.serverConfig?.providers ?? [],
-      props.serverConfig?.usageLimitSources ?? [],
-    );
+  const { onSendMessage } = props;
   const draftRunsLocally = composerRunsDraftLocally({
     text: draftMessage,
     holdsOnlyText: draftAttachments.length === 0,
     // A redirect's text answers its approval, so `/side` there is that text.
     sideChat: !props.redirectsApproval,
-    usageLimits: usageLimitsOffered,
     codexFeedback: selectedProviderStatus?.driver === "codex",
     freshSession: props.onFreshSession !== undefined && draftContext === undefined,
   });
@@ -396,23 +381,6 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     messages,
   );
   const sendLabel = sendPresentation.label;
-  const openUsageLimits = () => {
-    const report = collectProviderUsageLimits(
-      currentModelSelection.instanceId,
-      props.serverConfig?.providers ?? [],
-      props.serverConfig?.usageLimitSources ?? [],
-      Date.now(),
-      currentModelSelection.model,
-    );
-    onShowUsageLimits(report);
-    if (!report) {
-      Dialog.alert(
-        gt("Usage limits unavailable"),
-        gt("This provider does not currently report limits."),
-      );
-    }
-    return report !== null;
-  };
 
   const mentionableEnvironments = useMentionableEnvironments();
   // Mentions name any model for the agent, so they aren't limited to models this thread can switch to.
@@ -440,9 +408,6 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     hasThread: !props.isDraft,
     hasCompactableConversation: props.hasCompactableConversation,
     onChangeDraftMessage: props.onChangeDraftMessage,
-    offersUsageLimits: usageLimitsOffered,
-    onUsageLimits:
-      usageLimitsOffered && draftAttachments.length === 0 ? openUsageLimits : undefined,
     onOpenModelPicker: settingsSheetPresentation.open,
     modelOptions: mentionModelOptions,
     modelProviders: props.serverConfig?.providers,
@@ -555,10 +520,6 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     // Sending now would leave a still-converting pasted image out of the turn, so wait for it.
     if (nativeImageSubmit.deferSend(followUp)) return;
     if (pendingPastedTextAttachmentCountRef.current > 0) return;
-    if (usageLimitsOffered && isUsageLimitsCommand(draftMessage) && draftAttachments.length === 0) {
-      if (openUsageLimits()) onChangeDraftMessage("");
-      return;
-    }
     const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
     if (inFlightThreadIdsRef.current.has(threadKey)) return;
     inFlightThreadIdsRef.current.add(threadKey);

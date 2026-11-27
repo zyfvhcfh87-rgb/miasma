@@ -332,7 +332,7 @@ const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath:
 
 /**
  * Threads a server started on this database would resume by itself: every startup recovery kind,
- * plus latest-run failures and recovery choices, which usage-limit recovery can resume.
+ * plus latest-run failures and recovery choices.
  */
 export const resumableThreadIds = Effect.fn("resumableDevDbThreadIds")(function* () {
   const sql = yield* SqlClient.SqlClient;

@@ -1774,10 +1774,7 @@ const make = Effect.gen(function* () {
     const hasPendingRecovery =
       latestRun !== undefined &&
       (latestRun.status === "cancelled" ||
-        (latestRun.status === "failed" &&
-          (latestRun.restartContinuationOfRunId !== undefined ||
-            child.thread.limitRecovery?.runId !== latestRun.id ||
-            child.thread.limitRecovery.autoResume !== false)));
+        (latestRun.status === "failed" && latestRun.restartContinuationOfRunId !== undefined));
     const hasPendingSubagent = child.subagents.some(
       (task) =>
         (task.origin === "provider_native" &&
@@ -1793,7 +1790,6 @@ const make = Effect.gen(function* () {
     return (
       hasStoppableRun ||
       hasPendingRecovery ||
-      child.thread.limitRecovery?.autoResume === true ||
       (child.thread.pullRequests ?? []).some((link) => link.watch !== undefined) ||
       derivePendingBackgroundWork({
         latestRun,

@@ -43,6 +43,14 @@ import {
   parseKeybindingWhenExpression,
 } from "@t3tools/shared/keybindings";
 
+const RETIRED_KEYBINDING_COMMANDS: ReadonlySet<string> = new Set(["usage.limits"]);
+
+function isRetiredKeybindingEntry(entry: unknown): boolean {
+  if (typeof entry !== "object" || entry === null || !("command" in entry)) return false;
+  const command = (entry as { readonly command?: unknown }).command;
+  return typeof command === "string" && RETIRED_KEYBINDING_COMMANDS.has(command);
+}
+
 export const ResolvedKeybindingFromConfig = KeybindingRule.pipe(
   Schema.decodeTo(
     Schema.toType(ResolvedKeybindingRule),
@@ -314,27 +322,30 @@ const make = Effect.gen(function* () {
       ),
     );
 
-    return rawConfig.map((entry) => {
-      const decodedRule = decodeKeybindingRuleExit(entry);
-      if (
-        decodedRule._tag === "Success" &&
-        decodeResolvedKeybindingFromConfigExit(decodedRule.value)._tag === "Success"
-      ) {
-        return { value: decodedRule.value, rule: decodedRule.value };
-      }
-      return { value: entry, rule: null };
-    });
+    return rawConfig
+      .filter((entry) => !isRetiredKeybindingEntry(entry))
+      .map((entry) => {
+        const decodedRule = decodeKeybindingRuleExit(entry);
+        if (
+          decodedRule._tag === "Success" &&
+          decodeResolvedKeybindingFromConfigExit(decodedRule.value)._tag === "Success"
+        ) {
+          return { value: decodedRule.value, rule: decodedRule.value };
+        }
+        return { value: entry, rule: null };
+      });
   });
 
   const loadRuntimeCustomKeybindingsConfig = Effect.fn(function* (): Effect.fn.Return<
     {
       readonly keybindings: readonly KeybindingRule[];
       readonly issues: readonly ServerConfigIssue[];
+      readonly retiredCount: number;
     },
     KeybindingsConfigError
   > {
     if (!(yield* readConfigExists)) {
-      return { keybindings: [], issues: [] };
+      return { keybindings: [], issues: [], retiredCount: 0 };
     }
 
     const rawConfig = yield* readRawConfig;
@@ -344,12 +355,18 @@ const make = Effect.gen(function* () {
       return {
         keybindings: [],
         issues: [malformedConfigIssue(detail)],
+        retiredCount: 0,
       };
     }
 
     const keybindings: KeybindingRule[] = [];
     const issues: ServerConfigIssue[] = [];
+    let retiredCount = 0;
     for (const [index, entry] of decodedEntries.value.entries()) {
+      if (isRetiredKeybindingEntry(entry)) {
+        retiredCount += 1;
+        continue;
+      }
       const decodedRule = decodeKeybindingRuleExit(entry);
       if (decodedRule._tag === "Failure") {
         const detail = Cause.pretty(decodedRule.cause);
@@ -378,7 +395,7 @@ const make = Effect.gen(function* () {
       keybindings.push(decodedRule.value);
     }
 
-    return { keybindings, issues };
+    return { keybindings, issues, retiredCount };
   });
 
   const appliedMigrationsPath = path.join(
@@ -574,7 +591,7 @@ const make = Effect.gen(function* () {
           commands: skippedDefaults.map((rule) => rule.command),
         });
       }
-      if (defaultsToAppend.length > 0) {
+      if (defaultsToAppend.length > 0 || runtimeConfig.retiredCount > 0) {
         yield* writeConfigAtomically([...defaultsToAppend, ...customConfig]);
       }
       const settledLateDefaults = pendingLateDefaults.filter(

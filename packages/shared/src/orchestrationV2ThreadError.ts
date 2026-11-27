@@ -51,8 +51,6 @@ export function threadErrorSummary(
   const currentFailure =
     sessionError !== null && sessionError !== failure?.message ? null : failure;
   return {
-    usageLimitResetAt:
-      currentFailure?.class === "usage_limit" ? (currentFailure.resetAt ?? null) : null,
     lastError: sessionError ?? failure?.message ?? null,
     lastErrorClass: currentFailure?.class ?? null,
     lastErrorCode: currentFailure?.code ?? null,
@@ -101,27 +99,6 @@ export function runRanAfter(
       ? Number.POSITIVE_INFINITY
       : DateTime.toEpochMillis(candidate.completedAt);
   return end(run) === end(other) ? run.ordinal > other.ordinal : end(run) > end(other);
-}
-
-export function usageLimitBlockedRun(
-  runs: ReadonlyArray<OrchestrationV2Run>,
-  turnItems: ReadonlyArray<FailureScanTurnItem>,
-  sessionError: string | null,
-): OrchestrationV2Run | null {
-  const executed = latestExecutedRun(runs);
-  if (executed?.status !== "failed") return null;
-  const summary = threadErrorSummary(latestRootProviderFailure(executed, turnItems), sessionError);
-  return summary.lastErrorClass === "usage_limit" ? executed : null;
-}
-
-/** Retains a limited run's outcome when higher-ordinal runs never started. */
-export function usageLimitRunPresentedAsLatest(
-  runs: ReadonlyArray<OrchestrationV2Run>,
-  turnItems: ReadonlyArray<FailureScanTurnItem>,
-  sessionError: string | null,
-): OrchestrationV2Run | null {
-  const blocked = usageLimitBlockedRun(runs, turnItems, sessionError);
-  return blocked !== null && runs.some((run) => run.ordinal > blocked.ordinal) ? blocked : null;
 }
 
 export function latestUnheldRun(

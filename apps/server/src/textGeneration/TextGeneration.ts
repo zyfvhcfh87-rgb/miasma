@@ -7,8 +7,6 @@ import {
   isProviderTextGenerationCapable,
   resolveProjectProviderInstanceEnabled,
 } from "@t3tools/contracts";
-import * as DateTime from "effect/DateTime";
-import { exhaustedUsageWindow } from "@t3tools/shared/usageLimits";
 import { fallbackTextGenerationModelSelection } from "@t3tools/shared/serverSettings";
 import * as ServerSettings from "../serverSettings.ts";
 import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textGeneration";
@@ -102,7 +100,6 @@ export const make = Effect.gen(function* () {
         Effect.forEach(instances, (instance) => instance.snapshot.getSnapshot),
       ),
     );
-    const now = DateTime.toEpochMillis(yield* DateTime.now);
     const selected = snapshots.find((provider) => provider.instanceId === selection.instanceId);
     const selectedDisabled = selected?.enabled === false;
     // Only a failed probe counts: a pending one is also not installed yet.
@@ -115,7 +112,7 @@ export const make = Effect.gen(function* () {
             ?.supportsTextGeneration === false ||
           (selected.status === "error" &&
             (!selected.installed || selected.auth.status === "unauthenticated"))));
-    if (unusable || exhaustedUsageWindow(selected, now, selection.model)) {
+    if (unusable) {
       const settings = yield* serverSettings.getSettings.pipe(
         Effect.mapError(
           (cause) =>
@@ -143,8 +140,7 @@ export const make = Effect.gen(function* () {
               isProviderTextGenerationCapable(provider) &&
               provider.models.find((candidate) => candidate.slug === model)
                 ?.supportsTextGeneration !== false &&
-              (operation !== "generateReviewGuide" || INVESTIGATING_DRIVERS.has(driver)) &&
-              !exhaustedUsageWindow(provider, now, model)
+              (operation !== "generateReviewGuide" || INVESTIGATING_DRIVERS.has(driver))
             );
           },
           { defaultModelSelection: settings.defaultModelSelection },

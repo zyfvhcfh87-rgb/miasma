@@ -29,7 +29,6 @@ import {
   setComposerDraftContext,
   useComposerDraftSelection,
 } from "../../state/use-composer-drafts";
-import { USAGE_LIMITS_COMMAND } from "@t3tools/shared/usageLimits";
 import {
   detectComposerTrigger,
   replaceTextRange,
@@ -111,7 +110,6 @@ export function buildComposerSlashCommandItems(
     readonly atMessageStart: boolean;
     readonly hasThread: boolean;
     readonly hasCompactableConversation?: boolean;
-    readonly offersUsageLimits?: boolean;
     /** T3's `/clear` replaces the provider's, which would clear a session T3 still treats as live. */
     readonly offersFreshSession?: boolean;
     readonly offersSideChat?: boolean;
@@ -163,9 +161,6 @@ export function buildComposerSlashCommandItems(
     if (!command.name.toLowerCase().includes(query)) continue;
     if (command.name === "clear" && input.offersFreshSession) continue;
     if (command.name === "compact" && !input.hasCompactableConversation) continue;
-    if (command.name === USAGE_LIMITS_COMMAND.name && input.offersUsageLimits && !input.hasThread) {
-      continue;
-    }
     if (
       !input.hasThread &&
       input.selectedProviderStatus?.driver === "codex" &&
@@ -263,10 +258,8 @@ export function useComposerCommandMenu({
   selectedProviderStatus,
   hasThread,
   hasCompactableConversation,
-  offersUsageLimits = false,
   enabled = true,
   onChangeDraftMessage,
-  onUsageLimits,
   onOpenModelPicker,
   modelOptions,
   modelProviders,
@@ -288,10 +281,8 @@ export function useComposerCommandMenu({
   readonly selectedProviderStatus: ServerProvider | null;
   readonly hasThread: boolean;
   readonly hasCompactableConversation: boolean;
-  readonly offersUsageLimits?: boolean;
   readonly enabled?: boolean;
   readonly onChangeDraftMessage: (value: string) => void;
-  readonly onUsageLimits?: () => void;
   /** `/model` opens this picker instead of inserting text. */
   readonly onOpenModelPicker: () => void;
   readonly modelOptions?: ReadonlyArray<ModelOption>;
@@ -405,7 +396,6 @@ export function useComposerCommandMenu({
           atMessageStart: trigger.rangeStart === 0,
           hasThread,
           hasCompactableConversation,
-          offersUsageLimits,
           offersFreshSession: onFreshSession !== undefined,
           offersSideChat,
           selectedProviderStatus: selectedProviderStatus
@@ -674,14 +664,6 @@ export function useComposerCommandMenu({
     }
     if (item.type === "slash-command" && item.command === "clear" && onFreshSession) {
       clearTriggerThen(onFreshSession);
-      return;
-    }
-    if (
-      item.type === "provider-slash-command" &&
-      item.command.name === USAGE_LIMITS_COMMAND.name &&
-      onUsageLimits
-    ) {
-      clearTriggerThen(onUsageLimits);
       return;
     }
 

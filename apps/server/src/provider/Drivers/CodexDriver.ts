@@ -25,12 +25,10 @@ import {
   type CodexAdapterV2DriverEnv,
 } from "../../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import { ProviderDriverError } from "../Errors.ts";
-import * as ResetCreditCoordinator from "../resetCreditCoordinator.ts";
 import {
   checkCodexProviderStatus,
   makePendingCodexProvider,
   makeCodexSkillsProbe,
-  withCodexAppServerClient,
 } from "../CodexProvider.ts";
 import { resolveCodexLaunchArgs } from "../codexLaunchArgs.ts";
 import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
@@ -131,7 +129,6 @@ export type CodexDriverEnv =
   | CodexAdapterV2DriverEnv
   | ProviderHost.ProviderHost
   | ChildProcessSpawner.ChildProcessSpawner
-  | ResetCreditCoordinator.ResetCreditCoordinator
   | Digest.Digest
   | SecureRandom.SecureRandom
   | Signature.Signature
@@ -178,7 +175,6 @@ export const CodexDriver: ProviderDriver<
         config,
       });
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const resetCreditCoordinator = yield* ResetCreditCoordinator.ResetCreditCoordinator;
     const fileSystem = yield* FileSystem.FileSystem;
     const pathService = yield* Path.Path;
     const httpClient = yield* HttpClient.HttpClient;
@@ -250,7 +246,6 @@ export const CodexDriver: ProviderDriver<
         config: homeConfig,
       },
       {
-        onUsageLimits: (update) => snapshot.applyUsageLimits(update),
         models: Effect.suspend(() => snapshot.getSnapshot).pipe(
           Effect.map((value) => value.models),
         ),
@@ -351,59 +346,9 @@ export const CodexDriver: ProviderDriver<
             ),
           );
 
-    // Redemption spends account credit; serialize by the auth.json directory, keep one idempotency key
-    // until the outcome, and bound the wait so a hung app-server cannot hold the account lock.
+    // `codex login` and `codex logout` rewrite auth.json outside T3.
     // Auth overlays use effectiveHomePath; the continuation key would conflate them with shared homes.
     const accountKey = homeLayout.effectiveHomePath ?? homeLayout.sharedHomePath;
-    const consumeResetCredit: NonNullable<ProviderInstance["consumeResetCredit"]> = () =>
-      resetCreditCoordinator
-        .redeem(accountKey, (idempotencyKey) =>
-          Effect.gen(function* () {
-            const { client } = yield* withCodexAppServerClient({
-              binaryPath: effectiveConfig.binaryPath,
-              homePath: effectiveConfig.homePath,
-              launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
-              cwd: process.cwd(),
-              environment: processEnv,
-            });
-            const response = yield* client.request("account/rateLimitResetCredit/consume", {
-              idempotencyKey,
-            });
-            return response.outcome;
-          }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
-        )
-        .pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.mapError(
-            (cause) =>
-              new ProviderDriverError({
-                driver: DRIVER_KIND,
-                instanceId,
-                detail: "Codex could not redeem the reset credit.",
-                cause,
-              }),
-          ),
-          Effect.tap((outcome) =>
-            ResetCreditCoordinator.refreshAfterRedemption({
-              outcome,
-              getSnapshot: snapshot.getSnapshot,
-              refresh: snapshot.refresh,
-            }).pipe(
-              Effect.filterOrFail(
-                (confirmed) => confirmed,
-                () =>
-                  new ProviderDriverError({
-                    driver: DRIVER_KIND,
-                    instanceId,
-                    detail:
-                      "The reset was applied, but Codex could not confirm the new limits. Refresh to check.",
-                  }),
-              ),
-            ),
-          ),
-        );
-
-    // `codex login` and `codex logout` rewrite auth.json outside T3.
     if (effectiveConfig.enabled) {
       yield* fileSystem.watch(accountKey).pipe(
         Stream.filter((event) => pathService.basename(event.path) === "auth.json"),
@@ -423,7 +368,6 @@ export const CodexDriver: ProviderDriver<
       enabled,
       snapshot,
       snapshotForCwd,
-      consumeResetCredit,
       orchestrationAdapter,
       textGeneration,
     } satisfies ProviderInstance;

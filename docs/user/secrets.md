@@ -26,7 +26,7 @@ environment keeps its own list.
 ## Use a secret reference
 
 Credential fields in Settings, such as provider environment variables and credentials, source
-control tokens, usage limit keys, and device host tokens, show a source picker next to the field.
+control tokens, and device host tokens, show a source picker next to the field.
 Pick **Value** to save the credential itself, or pick a secret provider and enter a reference such
 as `op://vault/item/field`. Copy the reference from 1Password with **Copy Secret Reference**.
 Select the check button next to a reference to read it now. If it reads, providers that use it

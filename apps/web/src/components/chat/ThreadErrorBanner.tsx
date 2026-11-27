@@ -3,7 +3,7 @@ import {
   CHATGPT_USAGE_LIMIT_CODE,
   CHATGPT_WORKSPACE_ADMIN_REQUEST,
   CHATGPT_WORKSPACE_USAGE_LIMIT_CODE,
-} from "@t3tools/shared/usageLimits";
+} from "@t3tools/shared/chatGptSharing";
 import { msg, T, useGT } from "gt-react";
 import { memo } from "react";
 import { m } from "../../i18n/messages";
@@ -16,7 +16,7 @@ import { OpenAI } from "../Icons";
 import { ChatGptUsageButton } from "../settings/ChatGptUsageButton";
 import { ExpandableText } from "../settings/ExpandableText";
 
-export function copyAdminRequest() {
+function copyAdminRequest() {
   void writeTextToClipboard(CHATGPT_WORKSPACE_ADMIN_REQUEST, {
     target: "admin request",
     unavailableMessage: msg("Clipboard API is unavailable while copying admin request."),

@@ -7,7 +7,6 @@ import {
   SecretProviderKind,
   ServerSettings,
   ServerSettingsPatch,
-  UsageLimitSourceId,
   type ServerProvider,
 } from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
@@ -59,24 +58,6 @@ describe("fallbackTextGenerationModelSelection", () => {
     ).toEqual({ instanceId: "opencode", model: "opencode/big-pickle" });
   });
 
-  it("replaces and clears the fallback without carrying model options", () => {
-    const fallbackModelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "new" };
-    const settings = applyServerSettingsPatch(
-      {
-        ...DEFAULT_SERVER_SETTINGS,
-        fallbackModelSelection: {
-          ...fallbackModelSelection,
-          model: "old",
-          options: [{ id: "effort", value: "high" }],
-        },
-      },
-      { fallbackModelSelection },
-    );
-    expect(settings.fallbackModelSelection).toEqual(fallbackModelSelection);
-    expect(
-      applyServerSettingsPatch(settings, { fallbackModelSelection: null }).fallbackModelSelection,
-    ).toBeNull();
-  });
   it("falls back to a configured non-default instance", () => {
     const configured = ProviderInstanceId.make("codex_work");
     const providerInstances = {
@@ -655,29 +636,6 @@ describe("serverSettings helpers", () => {
       newWorktreesStartFromOrigin: true,
       providerInstances: {},
     });
-  });
-
-  it("upserts and removes usageLimitSources per entry so concurrent edits cannot clobber", () => {
-    const hubA = UsageLimitSourceId.make("cliproxy-a");
-    const hubB = UsageLimitSourceId.make("cliproxy-b");
-    const source = (url: string) => ({
-      kind: "cliproxy" as const,
-      url,
-      managementKey: "secret",
-      enabled: true,
-    });
-    const current = {
-      ...DEFAULT_SERVER_SETTINGS,
-      usageLimitSources: { [hubA]: source("http://a:8318") },
-    };
-
-    const added = applyServerSettingsPatch(current, {
-      usageLimitSources: { [hubB]: source("http://b:8318") },
-    });
-    expect(Object.keys(added.usageLimitSources)).toEqual([hubA, hubB]);
-
-    const removed = applyServerSettingsPatch(added, { usageLimitSources: { [hubA]: null } });
-    expect(Object.keys(removed.usageLimitSources)).toEqual([hubB]);
   });
 
   it("upserts and removes secretProviders per entry so concurrent edits cannot clobber", () => {

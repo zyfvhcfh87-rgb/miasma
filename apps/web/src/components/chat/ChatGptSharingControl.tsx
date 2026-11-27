@@ -1,4 +1,4 @@
-import { usesChatGptSharing } from "@t3tools/shared/usageLimits";
+import { usesChatGptSharing } from "@t3tools/shared/chatGptSharing";
 import type { ServerProvider } from "@t3tools/contracts";
 import { T, useGT } from "gt-react";
 import { useId } from "react";

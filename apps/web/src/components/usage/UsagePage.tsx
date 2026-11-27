@@ -1,5 +1,5 @@
 import { ChatGptUsageButton } from "../settings/ChatGptUsageButton";
-import { usesChatGptSharing } from "@t3tools/shared/usageLimits";
+import { usesChatGptSharing } from "@t3tools/shared/chatGptSharing";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
@@ -12,10 +12,6 @@ import {
 import { CircleAlertIcon, ChevronDownIcon, InfoIcon, SlidersHorizontalIcon } from "lucide-react";
 import { T, useGT, useLocale, useMessages, Var } from "gt-react";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
-import { settlePromise } from "@t3tools/client-runtime/state/runtime";
-import * as AsyncResult from "effect/reactivity/AsyncResult";
-import * as Cause from "effect/Cause";
-import { refreshUsageLimits } from "@t3tools/client-runtime/state/usage";
 import {
   updatingProvidersLabel,
   usageEnvironmentProgress,
@@ -35,12 +31,11 @@ import { usePrimarySettings } from "../../hooks/useSettings";
 import { resolveHour12 } from "../../timestampFormat";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { environmentPresentations } from "../../state/presentation";
-import { primaryServerKeybindingsAtom, serverEnvironment } from "../../state/server";
+import { primaryServerKeybindingsAtom } from "../../state/server";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { isModelPickerOpen } from "../../modelPickerVisibility";
 import { shortcutLabelForCommand } from "../../keybindings";
 import { useUsage, type EnvironmentUsageStatus } from "../../state/usage";
-import { useAtomCommand } from "../../state/use-atom-command";
 import {
   enumerateDays,
   enumerateHourStarts,
@@ -77,7 +72,6 @@ import {
   WorkspaceBreadcrumbText,
 } from "../WorkspaceBreadcrumb";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
-import { UsageLimitsSection } from "./UsageLimits";
 import { UsagePriceOverrides } from "./UsagePriceOverrides";
 import { UsageProviderChart } from "./UsageProviderChart";
 import { SpeedPremium, UsageModelDialog } from "./UsageModelDialog";
@@ -200,9 +194,7 @@ export function UsagePage() {
     ),
   }));
   const metric = preferences.metric;
-  const showingLimits = metric === "limits";
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [limitsNow, setLimitsNow] = useState(() => Date.now());
   const refreshingRef = useRef(false);
   const [priceDialog, setPriceDialog] = useState<{ readonly model?: string } | null>(null);
   const [selectedEnvironmentIds, setSelectedEnvironmentIds] =
@@ -221,15 +213,11 @@ export function UsagePage() {
   const merged = shown?.merged ?? answeredUsage;
   const shownWindow = shown?.window ?? window;
   const shownHourly = shownWindow.resolution === "hour";
-  const refreshingUsage = isRefreshing && !showingLimits;
+  const refreshingUsage = isRefreshing;
   const showingKept = shown !== null && shown.window !== window;
-  const presentations = useAtomValue(environmentPresentations.presentationsAtom);
   const presentationsWithProviders = useAtomValue(
     environmentPresentations.presentationsWithProvidersAtom,
   );
-  const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
-    reportFailure: false,
-  });
 
   const canReadDiagnostics = selectedEnvironments.some(
     (environment) => environment.canReadDiagnostics,
@@ -249,28 +237,8 @@ export function UsagePage() {
     });
   };
   const selectMetric = (nextMetric: UsageMetric) => {
-    if (nextMetric === "limits") setLimitsNow(Date.now());
     updatePreferences({ metric: nextMetric });
   };
-  const refreshLimits = (automatic = false) =>
-    // Settled so the timestamp still advances when a refresh throws.
-    settlePromise(() =>
-      Promise.all(
-        Array.from(presentations, ([environmentId, presentation]) => {
-          if (selectedEnvironmentIds !== null && !selectedEnvironmentIds.has(environmentId)) return;
-          if (presentation.connection.phase === "connected" && presentation.serverConfig !== null) {
-            return refreshUsageLimits(
-              environmentId,
-              () => refreshProviders({ environmentId, input: {} }),
-              automatic,
-            );
-          }
-        }),
-      ),
-    ).then((result) => {
-      setLimitsNow(Date.now());
-      if (!AsyncResult.isSuccess(result)) throw Cause.squash(result.cause);
-    });
   const onUsageKeyDown = useEffectEvent((event: KeyboardEvent) => {
     if (
       event.defaultPrevented ||
@@ -289,7 +257,7 @@ export function UsagePage() {
     event.preventDefault();
     event.stopPropagation();
     if (metricOption) selectMetric(metricOption.value);
-    if (periodOption && !showingLimits) selectWindow(periodOption.days);
+    if (periodOption) selectWindow(periodOption.days);
   });
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window capture keydown listener for usage metric and period shortcuts
@@ -301,15 +269,6 @@ export function UsagePage() {
   const refreshWindow = () => {
     if (refreshingRef.current) return;
 
-    if (showingLimits) {
-      refreshingRef.current = true;
-      setIsRefreshing(true);
-      void refreshLimits().finally(() => {
-        refreshingRef.current = false;
-        setIsRefreshing(false);
-      });
-      return;
-    }
     const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
     if (
       nextWindow.sinceDay !== window.sinceDay ||
@@ -326,24 +285,6 @@ export function UsagePage() {
       setIsRefreshing(false);
     });
   };
-  const connectedLimitsEnvironments = [...presentations]
-    .filter(
-      ([environmentId, presentation]) =>
-        presentation.connection.phase === "connected" &&
-        presentation.serverConfig !== null &&
-        (selectedEnvironmentIds === null || selectedEnvironmentIds.has(environmentId)),
-    )
-    .map(([environmentId]) => environmentId)
-    .sort()
-    .join(",");
-  const autoRefreshLimits = useEffectEvent(() => {
-    void refreshLimits(true);
-  });
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- refreshes provider limits from the server when the connected environment set changes
-  useEffect(() => {
-    if (showingLimits && connectedLimitsEnvironments) autoRefreshLimits();
-  }, [showingLimits, connectedLimitsEnvironments]);
-
   const days = enumerateDays(shownWindow.sinceDay, shownWindow.untilDay);
   const hours =
     shownWindow.sinceTime === undefined || shownWindow.untilTime === undefined
@@ -356,7 +297,6 @@ export function UsagePage() {
         (selectedEnvironmentIds === null || selectedEnvironmentIds.has(id)) &&
         (presentation.serverConfig?.providers ?? []).some(usesChatGptSharing),
     );
-
   const windowLabel =
     shownHourly && shownWindow.sinceTime !== undefined && shownWindow.untilTime !== undefined
       ? gt("{start} to {end}", {
@@ -384,7 +324,7 @@ export function UsagePage() {
             selectedEnvironments={selectedEnvironments}
             selectedEnvironmentIds={selectedEnvironmentIds}
             onSelectionChange={setSelectedEnvironmentIds}
-            showUsageStatus={!showingLimits}
+            showUsageStatus
             refreshing={refreshingUsage}
             isPartial={isPartial}
             duplicateSources={merged.duplicateSources}
@@ -400,31 +340,25 @@ export function UsagePage() {
           />
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
-      {!showingLimits ? (
-        <span className="hidden min-w-0 truncate text-xs text-muted-foreground @7xl/usage-header:block">
-          {windowLabel}
-        </span>
-      ) : null}
+      <span className="hidden min-w-0 truncate text-xs text-muted-foreground @7xl/usage-header:block">
+        {windowLabel}
+      </span>
       <div className="ms-auto hidden shrink-0 items-center justify-end gap-2 @4xl/usage-header:flex">
-        {/* Limits are always current, so they have no period. The period sits before the metric
-            tabs so dropping it never moves them. */}
-        {showingLimits ? null : (
-          <ToggleGroup
-            aria-label={gt("Usage period")}
-            variant="segmented"
-            value={[String(windowDays)]}
-            onValueChange={(next) => {
-              const value = next[0];
-              if (value) selectWindow(Number(value));
-            }}
-          >
-            {WINDOW_OPTIONS.map((option) => (
-              <Toggle key={option.days} value={String(option.days)} title={shortcutTitle(option)}>
-                {m(option.label)}
-              </Toggle>
-            ))}
-          </ToggleGroup>
-        )}
+        <ToggleGroup
+          aria-label={gt("Usage period")}
+          variant="segmented"
+          value={[String(windowDays)]}
+          onValueChange={(next) => {
+            const value = next[0];
+            if (value) selectWindow(Number(value));
+          }}
+        >
+          {WINDOW_OPTIONS.map((option) => (
+            <Toggle key={option.days} value={String(option.days)} title={shortcutTitle(option)}>
+              {m(option.label)}
+            </Toggle>
+          ))}
+        </ToggleGroup>
         <ToggleGroup
           aria-label={gt("Usage metric")}
           variant="segmented"
@@ -442,9 +376,9 @@ export function UsagePage() {
         </ToggleGroup>
         <Button
           onClick={refreshWindow}
-          aria-label={showingLimits ? gt("Refresh limits") : gt("Refresh usage")}
+          aria-label={gt("Refresh usage")}
           aria-busy={isRefreshing}
-          disabled={isRefreshing || (!showingLimits && !canReadDiagnostics)}
+          disabled={isRefreshing || !canReadDiagnostics}
           size="icon-sm"
           variant="ghost"
         >
@@ -452,29 +386,27 @@ export function UsagePage() {
         </Button>
       </div>
       <div className="ms-auto flex shrink-0 items-center justify-end gap-1 @4xl/usage-header:hidden">
-        {showingLimits ? null : (
-          <Select value={String(windowDays)} onValueChange={(value) => selectWindow(Number(value))}>
-            <SelectTrigger
-              aria-label={gt("Usage period")}
-              size="compact"
-              variant="ghost"
-              className="w-auto min-w-0"
-            >
-              <SelectValue>{windowOptionLabel && m(windowOptionLabel)}</SelectValue>
-            </SelectTrigger>
-            <SelectPopup align="end" alignItemWithTrigger={false}>
-              {WINDOW_OPTIONS.map((option) => (
-                <SelectItem
-                  key={option.days}
-                  value={String(option.days)}
-                  title={shortcutTitle(option)}
-                >
-                  {m(option.label)}
-                </SelectItem>
-              ))}
-            </SelectPopup>
-          </Select>
-        )}
+        <Select value={String(windowDays)} onValueChange={(value) => selectWindow(Number(value))}>
+          <SelectTrigger
+            aria-label={gt("Usage period")}
+            size="compact"
+            variant="ghost"
+            className="w-auto min-w-0"
+          >
+            <SelectValue>{windowOptionLabel && m(windowOptionLabel)}</SelectValue>
+          </SelectTrigger>
+          <SelectPopup align="end" alignItemWithTrigger={false}>
+            {WINDOW_OPTIONS.map((option) => (
+              <SelectItem
+                key={option.days}
+                value={String(option.days)}
+                title={shortcutTitle(option)}
+              >
+                {m(option.label)}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
         <Select
           value={metric}
           onValueChange={(value) => {
@@ -499,9 +431,9 @@ export function UsagePage() {
         </Select>
         <Button
           onClick={refreshWindow}
-          aria-label={showingLimits ? gt("Refresh limits") : gt("Refresh usage")}
+          aria-label={gt("Refresh usage")}
           aria-busy={isRefreshing}
-          disabled={isRefreshing || (!showingLimits && !canReadDiagnostics)}
+          disabled={isRefreshing || !canReadDiagnostics}
           size="icon-sm"
           variant="ghost"
         >
@@ -524,19 +456,9 @@ export function UsagePage() {
             {selectedEnvironments.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 {environments.length === 0
-                  ? showingLimits
-                    ? gt("Connect an environment to see limits.")
-                    : gt("Connect an environment to see usage.")
-                  : showingLimits
-                    ? gt("Select an environment to see limits.")
-                    : gt("Select an environment to see usage.")}
+                  ? gt("Connect an environment to see usage.")
+                  : gt("Select an environment to see usage.")}
               </p>
-            ) : showingLimits ? (
-              <UsageLimitsSection
-                selectedEnvironmentIds={selectedEnvironmentIds}
-                hiddenProviders={hiddenProviders}
-                now={limitsNow}
-              />
             ) : shown === null ? (
               <UsageSkeleton />
             ) : !canReadDiagnostics ? (
@@ -571,22 +493,20 @@ export function UsagePage() {
           </WorkspacePageContainer>
         </ScrollArea>
       </div>
-      {showingLimits ? null : (
-        <UsageModelDialogHost
-          models={merged.models}
-          environments={selectedEnvironments}
-          metric={metric === "tokens" ? "tokens" : "cost"}
-          chartWindow={{
-            days,
-            hours,
-            resolution: shownHourly ? "hour" : "day",
-            timeZone: shownWindow.timeZone,
-            referenceTime: shownWindow.untilTime,
-            hour12,
-          }}
-          onSetPrice={(model) => setPriceDialog({ model })}
-        />
-      )}
+      <UsageModelDialogHost
+        models={merged.models}
+        environments={selectedEnvironments}
+        metric={metric === "tokens" ? "tokens" : "cost"}
+        chartWindow={{
+          days,
+          hours,
+          resolution: shownHourly ? "hour" : "day",
+          timeZone: shownWindow.timeZone,
+          referenceTime: shownWindow.untilTime,
+          hour12,
+        }}
+        onSetPrice={(model) => setPriceDialog({ model })}
+      />
       {priceDialog ? (
         <UsagePriceOverrides
           usage={environments}

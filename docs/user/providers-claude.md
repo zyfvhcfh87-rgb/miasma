@@ -81,14 +81,6 @@ over 200,000 tokens. Each Claude provider's settings can override it:
 - **Never** skips idle compaction and Claude's resume prompt. **Auto-compact after**
   still applies, and you can still compact by hand.
 
-## Usage limits
-
-If your Claude subscription runs out of usage mid-turn, the thread shows which
-limit was reached and the remaining wait when Claude provides a reset time.
-Claude Code holds the turn until that window reopens, so it can keep showing as
-working. Wait for the reset, or stop the turn and continue later. The warning's
-timestamp shows when the displayed wait started.
-
 ## Steering
 
 A steer waits until Claude finishes the tool calls it is running, then Claude reads it

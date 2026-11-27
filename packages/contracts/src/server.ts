@@ -27,7 +27,6 @@ import { ManagedPolicySummary } from "./managedPolicy.ts";
 import { ModelCapabilities, ProviderOptionDescriptor } from "./model.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
-import { ServerProviderUsageLimits, UsageLimitSourceSnapshots } from "./providerUsageLimits.ts";
 import { ServerSettings } from "./settings.ts";
 import { DesktopUpdateChannelSchema } from "./ipc.ts";
 
@@ -293,7 +292,6 @@ export const ServerProvider = Schema.Struct({
    * changed. Clients holding fetched workspace snapshots for this provider fetch them again.
    */
   workspaceRescannedAt: Schema.optionalKey(IsoDateTime),
-  usageLimits: Schema.optional(ServerProviderUsageLimits),
   versionAdvisory: Schema.optionalKey(ServerProviderVersionAdvisory),
   compatibilityAdvisory: Schema.optionalKey(ServerProviderCompatibilityAdvisory),
   updateState: Schema.optionalKey(ServerProviderUpdateState),
@@ -771,8 +769,6 @@ export const ServerConfig = Schema.Struct({
    * subscriber the same array twice per connect.
    */
   environmentThemes: Schema.optional(Schema.Array(EnvironmentTheme)),
-  /** Stream-only and opt-in; the source stream emits the current set on subscribe. */
-  usageLimitSources: Schema.optional(UsageLimitSourceSnapshots),
 });
 export type ServerConfig = typeof ServerConfig.Type;
 
@@ -895,20 +891,6 @@ export const ServerConfigStreamEnvironmentThemesUpdatedEvent = Schema.Struct({
 export type ServerConfigStreamEnvironmentThemesUpdatedEvent =
   typeof ServerConfigStreamEnvironmentThemesUpdatedEvent.Type;
 
-export const ServerConfigUsageLimitSourcesUpdatedPayload = Schema.Struct({
-  sources: UsageLimitSourceSnapshots,
-});
-export type ServerConfigUsageLimitSourcesUpdatedPayload =
-  typeof ServerConfigUsageLimitSourcesUpdatedPayload.Type;
-
-export const ServerConfigStreamUsageLimitSourcesUpdatedEvent = Schema.Struct({
-  version: Schema.Literal(1),
-  type: Schema.Literal("usageLimitSourcesUpdated"),
-  payload: ServerConfigUsageLimitSourcesUpdatedPayload,
-});
-export type ServerConfigStreamUsageLimitSourcesUpdatedEvent =
-  typeof ServerConfigStreamUsageLimitSourcesUpdatedEvent.Type;
-
 export const ServerConfigStreamEvent = Schema.Union([
   ServerConfigStreamSnapshotEvent,
   ServerConfigStreamKeybindingsUpdatedEvent,
@@ -916,7 +898,6 @@ export const ServerConfigStreamEvent = Schema.Union([
   ServerConfigStreamProviderStatusDeltasEvent,
   ServerConfigStreamSettingsUpdatedEvent,
   ServerConfigStreamEnvironmentThemesUpdatedEvent,
-  ServerConfigStreamUsageLimitSourcesUpdatedEvent,
 ]);
 export type ServerConfigStreamEvent = typeof ServerConfigStreamEvent.Type;
 

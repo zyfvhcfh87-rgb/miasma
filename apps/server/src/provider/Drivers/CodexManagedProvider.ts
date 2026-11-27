@@ -106,16 +106,6 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
         message: "Sign in with ChatGPT to use Codex.",
         auth: { status: "unauthenticated" as const },
       };
-    const usageLimits = {
-      checkedAt: base.checkedAt,
-      windows: [],
-      unavailable: {
-        reason: "unsupported" as const,
-        message:
-          "ChatGPT tracks subscription usage across connected apps. Open Usage settings with the account you connected to Codex.",
-      },
-      externalUsage: { label: "ChatGPT usage", url: "https://chatgpt.com/#settings/Usage" },
-    };
     const managedAuth = {
       subscriptionSharing: true,
       profileId: saved.value.clientId,
@@ -156,7 +146,6 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
           ...draft,
           auth: managedAuth,
           version: draft.version ?? executable.value.version,
-          usageLimits,
           models: draft.models.map((model) => ({
             ...model,
             ...(model.capabilities
@@ -201,9 +190,6 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
                 ? { email: current.value.email.trim() }
                 : {}),
             },
-            ...(Option.isSome(current) && current.value.scopes.includes("chatgpt.tokens.use.direct")
-              ? { usageLimits }
-              : {}),
             message: "Could not check Codex right now. Retry, or reconnect in provider settings.",
           })),
         ),
@@ -244,7 +230,6 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
   // already wraps openSession in withAccess, so resolve without re-entering it.
   const models = snapshot.getSnapshot.pipe(Effect.map((value) => value.models));
   const orchestrationAdapter = yield* createCodexAdapterV2(input, {
-    onUsageLimits: (update) => snapshot.applyUsageLimits(update),
     models,
     resolveRuntime: runtime.resolve,
   }).pipe(

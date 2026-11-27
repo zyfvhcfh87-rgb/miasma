@@ -535,7 +535,7 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       const keybindings = yield* Keybindings.Keybindings;
       yield* writeKeybindingsConfig(
         keybindingsConfigPath,
-        Array.from({ length: 210 }, (_, index) => ({
+        Array.from({ length: 211 }, (_, index) => ({
           key: "mod+alt+f1",
           command: `script.filler-${index}.run` as const,
         })),
@@ -568,7 +568,7 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
         const keybindings = yield* Keybindings.Keybindings;
         yield* writeKeybindingsConfig(
           keybindingsConfigPath,
-          Array.from({ length: 209 }, (_, index) => ({
+          Array.from({ length: 210 }, (_, index) => ({
             key: "mod+alt+f1",
             command: `script.filler-${index}.run` as const,
           })),
@@ -851,6 +851,34 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
               rule.shortcut.modKey,
           ),
         );
+      }).pipe(Effect.scoped, Effect.provide(layerKeybindings())),
+  );
+
+  it.effect(
+    "ignores and strips retired usage.limits rules on startup without blocking default sync",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+        yield* fs.makeDirectory(path.dirname(keybindingsConfigPath), { recursive: true });
+        yield* fs.writeFileString(
+          keybindingsConfigPath,
+          JSON.stringify([
+            { key: "l", command: "usage.limits", when: "usagePageOpen" },
+            { key: "mod+j", command: "terminal.toggle" },
+          ]),
+        );
+
+        const keybindings = yield* Keybindings.Keybindings;
+        yield* keybindings.start;
+        const state = yield* keybindings.loadConfigState;
+        assert.deepEqual(state.issues, []);
+        assert.isTrue(state.keybindings.some((rule) => rule.command === "usage.cost"));
+
+        const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+        assert.isFalse(persisted.some((rule) => (rule.command as string) === "usage.limits"));
+        assert.isTrue(persisted.some((rule) => rule.command === "usage.cost"));
       }).pipe(Effect.scoped, Effect.provide(layerKeybindings())),
   );
 });

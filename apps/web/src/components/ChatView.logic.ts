@@ -9,10 +9,7 @@ import {
 import { turnChanges } from "@t3tools/client-runtime/state/thread-repositories";
 import { COMPACT_COMMAND_PATTERN } from "@t3tools/client-runtime/state/context-window";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
-import {
-  latestUnheldRun,
-  usageLimitRunPresentedAsLatest,
-} from "@t3tools/shared/orchestrationV2ThreadError";
+import { latestUnheldRun } from "@t3tools/shared/orchestrationV2ThreadError";
 import * as Option from "effect/Option";
 import type { SetStateAction } from "react";
 import { applyClaudePromptEffortPrefix, resolvePromptInjectedEffort } from "@t3tools/shared/model";
@@ -1637,10 +1634,6 @@ const LIVE_RUN_STATUSES = new Set(["queued", "preparing", "starting", "running"]
  */
 export function deriveThreadPendingBackgroundTasks(projection: ThreadStructure | null) {
   if (projection === null) return [];
-  const sessionError =
-    projection.providerSessions.findLast(
-      (session) => session.providerInstanceId === projection.thread.providerInstanceId,
-    )?.lastError ?? null;
   const liveRunIds = new Set(
     projection.runs.filter((run) => LIVE_RUN_STATUSES.has(run.status)).map((run) => run.id),
   );
@@ -1649,9 +1642,7 @@ export function deriveThreadPendingBackgroundTasks(projection: ThreadStructure |
     if (item.runId === null || !liveRunIds.has(item.runId)) continue;
     if (item.nativeItemRef?.nativeId) foregroundTaskIds.add(item.nativeItemRef.nativeId);
   }
-  const latestRun =
-    usageLimitRunPresentedAsLatest(projection.runs, projection.turnItems, sessionError) ??
-    latestUnheldRun(projection.runs.filter((run) => !liveRunIds.has(run.id)));
+  const latestRun = latestUnheldRun(projection.runs.filter((run) => !liveRunIds.has(run.id)));
   return [
     ...derivePendingBackgroundWork({
       latestRun,

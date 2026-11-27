@@ -126,16 +126,14 @@ describe("V2 storage cleanup eligibility", () => {
   const candidate = () => shell({ branch: "feature", worktreePath: "/worktrees/feature" });
 
   it("allows an idle worktree and rejects the project checkout", () => {
-    expect(storageCleanupThreadIdle(candidate(), NOW_MS, DEFAULT_SERVER_SETTINGS)).toBe(true);
-    expect(storageCleanupThreadIdle(shell(), NOW_MS, DEFAULT_SERVER_SETTINGS)).toBe(false);
+    expect(storageCleanupThreadIdle(candidate(), NOW_MS)).toBe(true);
+    expect(storageCleanupThreadIdle(shell(), NOW_MS)).toBe(false);
   });
 
   it.each(["running", "starting", "preparing", "waiting", "queued"] as const)(
     "retains a worktree while its thread is %s",
     (status) => {
-      expect(
-        storageCleanupThreadIdle(candidateWithStatus(status), NOW_MS, DEFAULT_SERVER_SETTINGS),
-      ).toBe(false);
+      expect(storageCleanupThreadIdle(candidateWithStatus(status), NOW_MS)).toBe(false);
     },
   );
 
@@ -149,7 +147,6 @@ describe("V2 storage cleanup eligibility", () => {
             pendingBackgroundTasks: [{ taskId: "task-1", kind: "command" }],
           },
           NOW_MS,
-          DEFAULT_SERVER_SETTINGS,
         ),
       ).toBe(false);
     },
@@ -169,7 +166,6 @@ describe("V2 storage cleanup eligibility", () => {
             },
           },
           NOW_MS,
-          DEFAULT_SERVER_SETTINGS,
         ),
       ).toBe(false);
     },
@@ -177,89 +173,15 @@ describe("V2 storage cleanup eligibility", () => {
 
   it("retains an active run even if the shell status is idle", () => {
     expect(
-      storageCleanupThreadIdle(
-        { ...candidate(), activeRunId: RunId.make("run") },
-        NOW_MS,
-        DEFAULT_SERVER_SETTINGS,
-      ),
+      storageCleanupThreadIdle({ ...candidate(), activeRunId: RunId.make("run") }, NOW_MS),
     ).toBe(false);
   });
 
   it("retains a queued prompt before the new run has been projected", () => {
     expect(
-      storageCleanupThreadIdle(
-        { ...candidate(), latestUserMessageAt: at(-1_000) },
-        NOW_MS,
-        DEFAULT_SERVER_SETTINGS,
-      ),
+      storageCleanupThreadIdle({ ...candidate(), latestUserMessageAt: at(-1_000) }, NOW_MS),
     ).toBe(false);
   });
-
-  it.each([
-    { name: "snoozed until a future reset", snooze: true, resetIn: DAY_MS, idle: false },
-    { name: "set to auto-resume", autoResume: true, resetIn: DAY_MS, idle: false },
-    { name: "with recovery turned off", resetIn: DAY_MS, idle: true },
-    { name: "auto-resuming after the reset", autoResume: true, resetIn: -1_000, idle: false },
-    { name: "snoozed past its reset", snooze: true, resetIn: -1_000, idle: true },
-    {
-      name: "settled with an auto-resume pending",
-      autoResume: true,
-      settled: true,
-      resetIn: -1_000,
-      idle: true,
-    },
-    { name: "not yet armed by the recovery worker", armed: false, resetIn: DAY_MS, idle: false },
-    {
-      name: "not yet armed, auto-resume after reset",
-      armed: false,
-      autoResumeSetting: true,
-      resetIn: -1_000,
-      idle: false,
-    },
-    {
-      name: "never armed because its reset is days overdue",
-      armed: false,
-      autoResumeSetting: true,
-      resetIn: -5 * DAY_MS,
-      idle: true,
-    },
-    {
-      name: "not armed with recovery settings off",
-      armed: false,
-      settingsOff: true,
-      resetIn: DAY_MS,
-      idle: true,
-    },
-  ])(
-    "treats a usage-limited thread $name as idle: $idle",
-    ({
-      autoResume = false,
-      snooze = false,
-      armed = true,
-      autoResumeSetting = false,
-      settled,
-      settingsOff,
-      resetIn,
-      idle,
-    }) => {
-      const runId = RunId.make("run-1");
-      const resetAt = DateTime.formatIso(at(resetIn));
-      expect(
-        storageCleanupThreadIdle(
-          {
-            ...candidateWithStatus("failed"),
-            latestRunId: runId,
-            lastErrorClass: "usage_limit",
-            usageLimitResetAt: resetAt,
-            settledOverride: settled ? "settled" : null,
-            limitRecovery: armed ? { runId, resetAt, autoResume, snooze } : null,
-          },
-          NOW_MS,
-          { autoResumeLimitedThreads: autoResumeSetting, snoozeLimitedThreads: !settingsOff },
-        ),
-      ).toBe(idle);
-    },
-  );
 
   it("uses V2 run activity instead of metadata refreshes for retention", () => {
     const thread = candidate();
@@ -4265,44 +4187,12 @@ describe("storage cleanup reports and local file policies", () => {
 });
 
 describe("settled worktree rechecks", () => {
-  it.effect.each(["autoResumeLimitedThreads", "snoozeLimitedThreads"] as const)(
-    "keeps a usage-limited checkout when %s is enabled during measurement",
-    (preference) =>
-      runCleanupTest(
-        Effect.gen(function* () {
-          yield* TestClock.setTime(NOW_MS);
-          const fixture = yield* pausedMeasurementFixture();
-          fixture.setSettings({ autoResumeLimitedThreads: false, snoozeLimitedThreads: false });
-          fixture.setThreads([
-            shell({
-              branch: "feature",
-              worktreePath: fixture.worktree,
-              status: "failed",
-              latestRunId: RunId.make("limited-run"),
-              lastErrorClass: "usage_limit",
-              usageLimitResetAt: DateTime.formatIso(at(DAY_MS)),
-            }),
-          ]);
-          const run = yield* fixture.service.runNow.pipe(Effect.forkChild);
-          yield* Deferred.await(fixture.measuring);
-          fixture.setSettings({ [preference]: true });
-          yield* Deferred.succeed(fixture.resume, undefined);
-          const report = yield* Fiber.join(run);
-          expect(report.entries[0]).toMatchObject({
-            outcome: "kept",
-            reason: "Settings changed since check",
-          });
-          expect(yield* fixture.fs.exists(fixture.worktree)).toBe(true);
-        }),
-      ),
-  );
   it.effect("keeps a task folder when settings change after its checks began", () =>
     runCleanupTest(
       Effect.gen(function* () {
         yield* TestClock.setTime(NOW_MS);
         const fixture = yield* cleanupFixture();
         fixture.setSettings({
-          autoResumeLimitedThreads: false,
           storageCleanup: {
             ...DEFAULT_SERVER_SETTINGS.storageCleanup,
             worktreeSettledAfterDays: 0,
@@ -4315,7 +4205,13 @@ describe("settled worktree rechecks", () => {
         fixture.setTaskFolders({
           find: () =>
             Effect.sync(() => {
-              fixture.setSettings({ autoResumeLimitedThreads: true });
+              fixture.setSettings({
+                storageCleanup: {
+                  ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+                  worktreeSettledAfterDays: 0,
+                  worktreeOnDelete: true,
+                },
+              });
               return {
                 root: fixture.worktree,
                 projectId: ProjectId.make("project-1"),
@@ -4347,7 +4243,6 @@ describe("settled worktree rechecks", () => {
         yield* TestClock.setTime(NOW_MS);
         const fixture = yield* pausedMeasurementFixture();
         fixture.setSettings({
-          autoResumeLimitedThreads: false,
           storageCleanup: {
             ...DEFAULT_SERVER_SETTINGS.storageCleanup,
             worktreeSettledAfterDays: 0,
@@ -4382,7 +4277,13 @@ describe("settled worktree rechecks", () => {
         });
         const run = yield* fixture.service.runNow.pipe(Effect.forkChild);
         yield* Deferred.await(fixture.measuring);
-        fixture.setSettings({ autoResumeLimitedThreads: true });
+        fixture.setSettings({
+          storageCleanup: {
+            ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+            worktreeSettledAfterDays: 0,
+            worktreeOnDelete: true,
+          },
+        });
         yield* Deferred.succeed(fixture.resume, undefined);
         const report = yield* Fiber.join(run);
         expect(report.entries[0]).toMatchObject({

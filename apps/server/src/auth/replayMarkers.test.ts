@@ -31,7 +31,6 @@ const REAL_SECRET_NAMES = [
   "cloud-publish-agent-activity",
   "provider-env-Y29kZXg-T1BFTkFJX0FQSV9LRVk",
   "provider-auth-0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
-  "usage-limit-source-aHVi",
 ];
 
 it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("replayMarkers", (it) => {

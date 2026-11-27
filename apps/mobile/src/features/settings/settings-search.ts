@@ -110,8 +110,6 @@ const SETTINGS_SEARCH_TERMS = {
     msg("auto-settle", { $context: "settings search keyword" }),
     msg("settle", { $context: "settings search keyword" }),
     msg("snooze", { $context: "settings search keyword" }),
-    msg("usage limits", { $context: "settings search keyword" }),
-    msg("auto-resume", { $context: "settings search keyword" }),
     msg("thread behavior", { $context: "settings search keyword" }),
   ],
   SettingsFollowUp: [

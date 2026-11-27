@@ -345,7 +345,7 @@ export function CommandPalette(props: {
         key: "usage",
         kind: "action",
         title: gt("Usage", { $context: "command, opens usage settings" }),
-        searchTerms: ["limits", "accounts", "quota"],
+        searchTerms: ["cost", "tokens", "spend"],
         run: () => openSettings(navigation, "SettingsUsage"),
       },
       {

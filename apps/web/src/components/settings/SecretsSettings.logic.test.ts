@@ -25,9 +25,6 @@ const settings = Schema.decodeSync(ServerSettings)({
   sourceControlHosts: {
     github: { tokens: { "github.com": personal("op://gh"), "ghe.acme.test": work } },
   },
-  usageLimitSources: {
-    hub: { kind: "cliproxy", url: "https://hub.test", managementKey: personal("op://hub") },
-  },
   easDeviceHosts: [
     { kind: "eas", id: "eas", label: "Expo Simulators", accessToken: personal("op://expo") },
   ],
@@ -50,7 +47,6 @@ it.each([
       "Antigravity Work · API_TOKEN",
       "Codex · CODEX_TOKEN",
       "GitHub · github.com",
-      "https://hub.test · Management Key",
       "Expo Simulators · Access Token",
       "Simlock Pool · Agent Token",
       "Voice · OpenAI",

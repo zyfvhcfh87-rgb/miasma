@@ -10,10 +10,8 @@ import {
 } from "@t3tools/contracts";
 import { subagentResultForRun } from "@t3tools/provider-core/server/subagentProjection";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
-import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
 import * as Digest from "effect/crypto/Digest";
 import * as Clock from "effect/Clock";
-import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
@@ -24,7 +22,6 @@ import * as ThreadIssueService from "../orchestration-v2/ThreadIssueService.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
-import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as WorkflowAgentLinks from "./WorkflowAgentLinks.ts";
@@ -49,7 +46,6 @@ const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const launches = yield* ThreadLaunch.ThreadLaunchService;
   const projects = yield* ProjectService.ProjectService;
-  const providers = yield* ProviderRegistry.ProviderRegistry;
   const settings = yield* ServerSettings.ServerSettingsService;
   const digest = yield* Digest.Digest;
   const linked = yield* WorkflowAgentLinks.make;
@@ -187,14 +183,7 @@ const make = Effect.gen(function* () {
       const defaults = yield* projectDefaults(projectId);
       const modelSelection: ModelSelection | undefined =
         input.model === undefined
-          ? (resolveNewThreadModelSelection({
-              defaultSelection: defaults.defaultModelSelection,
-              fallbackSelection: defaults.fallbackModelSelection,
-              providers: yield* providers.getProviders,
-              settings: defaults,
-              projectId,
-              now: DateTime.toEpochMillis(yield* DateTime.now),
-            }).selection ?? undefined)
+          ? (defaults.defaultModelSelection ?? undefined)
           : {
               instanceId: ProviderInstanceId.make(input.model.instanceId),
               model: input.model.model,
