@@ -191,7 +191,7 @@ function Panel({
         onAddProjectScript={scriptResult}
         onUpdateProjectScript={scriptResult}
         onDeleteProjectScript={scriptResult}
-        usage={{} as never}
+        contextWindow={null}
       />
     </ChatCanvasContext>
   );

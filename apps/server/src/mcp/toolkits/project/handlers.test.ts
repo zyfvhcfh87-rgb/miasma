@@ -1062,55 +1062,6 @@ it.effect("a retried worktree launch replays after its base ref is gone", () =>
   }),
 );
 
-it.effect("a client launches with the fallback for an exhausted default", () =>
-  Effect.gen(function* () {
-    const launched: ThreadLaunch.ThreadLaunchInput[] = [];
-    const fallbackModel = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6.1-sol" };
-    const providers: ServerProvider[] = ["claudeAgent", "codex"].map((driver) => ({
-      instanceId: ProviderInstanceId.make(driver),
-      driver: ProviderDriverKind.make(driver),
-      enabled: true,
-      installed: true,
-      status: "ready",
-      version: null,
-      auth: { status: "authenticated" },
-      checkedAt: "2026-01-01T00:00:00Z",
-      models: [],
-      slashCommands: [],
-      skills: [],
-      ...(driver === "claudeAgent"
-        ? {
-            usageLimits: {
-              checkedAt: "2026-01-01T00:00:00Z",
-              windows: [{ id: "session", kind: "session", label: "Session", usedPercent: 100 }],
-            },
-          }
-        : {}),
-    }));
-    const { projectId, dependencies } = clientLaunchHarness({
-      runtimeModeCeiling: "full-access",
-      launched,
-      fallbackModel,
-      providers,
-    });
-    const toolkit = yield* ProjectToolkit.pipe(
-      Effect.provide(
-        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(dependencies)),
-      ),
-    );
-    const result = yield* toolkit
-      .handle("t3_thread_launch", {
-        projectId,
-        title: "Fallback",
-      })
-      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
-    expect(result.at(-1)?.result).toMatchObject({
-      modelSelection: fallbackModel,
-    });
-    expect(launched[0]?.modelSelection).toEqual(fallbackModel);
-  }),
-);
-
 it.effect("creating a project through MCP refuses a model default instead of dropping it", () =>
   Effect.gen(function* () {
     const harness = clientLaunchHarness({ runtimeModeCeiling: "full-access", launched: [] });

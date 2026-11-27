@@ -552,7 +552,6 @@ it.effect.each([
   "running-delegated-capped",
   "running-delegated-snoozed",
   "running-delegated-stopped",
-  "running-resume",
 ] as const)("recovers $0 work after restart", (scenario) => {
   const status = scenario.startsWith("starting")
     ? "starting"
@@ -566,8 +565,7 @@ it.effect.each([
     scenario === "starting-steered" ||
     scenario === "running-delegated-capped" ||
     scenario === "running-delegated-snoozed" ||
-    scenario === "running-delegated-stopped" ||
-    scenario === "running-resume";
+    scenario === "running-delegated-stopped";
   const startedAt =
     status === "running" || scenario === "starting-steered"
       ? DateTime.makeUnsafe("2026-11-01T19:34:40.403Z")
@@ -592,15 +590,6 @@ it.effect.each([
           : null,
       lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
       forkedFrom: null,
-      ...(scenario === "running-resume"
-        ? {
-            limitRecovery: {
-              runId: RunId.make("run_queued_restart_limited"),
-              resetAt: "2026-11-01T19:34:00.000Z",
-              autoResume: true,
-            },
-          }
-        : {}),
     },
     runtimeRequests: scenario.endsWith("request")
       ? [
@@ -636,9 +625,6 @@ it.effect.each([
         userMessageId: MessageId.make("message_queued_restart"),
         queuePosition: 1,
         providerInstanceId: ProviderInstanceId.make("codex"),
-        ...(scenario === "running-resume"
-          ? { usageLimitContinuationOfRunId: RunId.make("run_queued_restart_limited") }
-          : {}),
         ...(status === "preparing"
           ? {
               workspacePreparation: {
@@ -687,9 +673,7 @@ it.effect.each([
               id: MessageId.make("message_queued_restart"),
               ...(scenario.startsWith("running-delegated")
                 ? { createdBy: "agent", creationSource: "mcp" }
-                : scenario === "running-resume"
-                  ? { createdBy: "agent", creationSource: "server" }
-                  : { createdBy: "user" }),
+                : { createdBy: "user" }),
               ...(scenario === "starting-scheduled" ? { scheduledTaskId: "scheduled-task" } : {}),
             },
           ]
@@ -805,16 +789,6 @@ it.effect.each([
         assert.isUndefined(attemptEvent);
         assert.isUndefined(nodeEvent);
       }
-    }
-    // The unsent auto-resume gets a fresh request id so the limit worker sends it again.
-    if (scenario === "running-resume") {
-      const rearmed = command.events.find((event) => event.type === "thread.metadata-updated");
-      assert.equal(
-        rearmed?.type === "thread.metadata-updated"
-          ? rearmed.payload.limitRecovery?.requestId
-          : null,
-        command.commandId,
-      );
     }
   }).pipe(Effect.provide(layer));
 });

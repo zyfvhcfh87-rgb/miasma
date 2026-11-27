@@ -50,10 +50,7 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
-import { UsageLimitResetFallback } from "../usage/UsageLimitSources.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
-import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
-import type { ServerProvider } from "@t3tools/contracts";
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import {
   makeProviderEventRoutingState,
@@ -233,122 +230,6 @@ function threadCreatedEvent(
 }
 
 const layer = it.layer(layerTest);
-
-it.effect("takes a hub's reset for an unreset usage_limit, then refreshes the snapshot", () =>
-  Effect.gen(function* () {
-    const refreshed = yield* Deferred.make<void>();
-    const adapter = yield* ProviderAdapter.ProviderAdapterV2.pipe(
-      Effect.provide(
-        Layer.mock(ProviderAdapter.ProviderAdapterV2)({
-          instanceId: ProviderInstanceId.make("cursor-work"),
-          driver: ProviderDriverKind.make("cursor"),
-        }),
-      ),
-    );
-    const instance: ProviderInstance = {
-      instanceId: ProviderInstanceId.make("cursor-work"),
-      driverKind: ProviderDriverKind.make("cursor"),
-      continuationIdentity: {
-        driverKind: ProviderDriverKind.make("cursor"),
-        continuationKey: "work",
-      },
-      enabled: true,
-      displayName: undefined,
-      orchestrationAdapter: adapter,
-      textGeneration: {
-        generateBranchName: () => Effect.die("unused"),
-        generateCommitMessage: () => Effect.die("unused"),
-        generatePrContent: () => Effect.die("unused"),
-        generateThreadTitle: () => Effect.die("unused"),
-        generateReviewGuide: () => Effect.die("unused"),
-        generateTranscriptionPostProcessing: () => Effect.die("unused"),
-      },
-      snapshot: {
-        refreshUsage: Deferred.succeed(refreshed, undefined).pipe(Effect.asVoid),
-        getSnapshot: Effect.succeed({
-          auth: { status: "authenticated", endpoint: "http://hub.test:8317" },
-        } as ServerProvider),
-        refresh: Effect.die("unused"),
-        resolveMaintenance: () => Effect.die("unused"),
-        applyUsageLimits: () => Effect.die("unused"),
-        streamChanges: Stream.empty,
-      },
-    };
-    const lookups: ProviderInstanceId[] = [];
-    const hubLookups: Array<[string, string, string | null]> = [];
-    const instances = Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
-      getInstance: (id) =>
-        Effect.sync(() => {
-          lookups.push(id);
-          return id === instance.instanceId ? instance : undefined;
-        }),
-    });
-    yield* Effect.gen(function* () {
-      const now = yield* DateTime.now;
-      const eventSink = yield* EventSink.EventSinkV2;
-      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
-      const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const threadEvent = yield* threadCreatedEvent(now);
-      yield* eventSink.write({ events: [threadEvent] });
-      const input = {
-        providerSessionId: yield* idAllocator.allocate.providerSession({
-          providerInstanceId: instance.instanceId,
-          threadId: threadEvent.threadId,
-        }),
-        providerInstanceId: instance.instanceId,
-        threadId: threadEvent.threadId,
-      };
-      for (const failureClass of ["validation_error", "usage_limit"] as const) {
-        const stored = yield* ingestor.ingestNormalized({
-          ...input,
-          event: {
-            type: "turn.terminal",
-            driver: instance.driverKind,
-            providerThreadId: idAllocator.derive.providerThread({
-              driver: instance.driverKind,
-              nativeThreadId: "limited",
-            }),
-            providerTurnId: idAllocator.derive.providerTurn({
-              driver: instance.driverKind,
-              nativeTurnId: failureClass,
-            }),
-            runOrdinal: 1,
-            failureItemOrdinal: 1,
-            status: "failed",
-            failure: makeProviderFailure({
-              class: failureClass,
-              message: "Provider rejected turn.",
-            }),
-            threadDisposition: "reusable",
-          },
-        });
-        assert.equal(stored.length, 1);
-        if (failureClass === "validation_error") assert.deepEqual(lookups, []);
-        else {
-          const event = stored[0]?.event;
-          assert.equal(
-            event?.type === "turn-item.updated" && event.payload.type === "error"
-              ? event.payload.failure.resetAt
-              : undefined,
-            "2026-11-13T18:00:00.000Z",
-          );
-        }
-      }
-      assert.deepEqual(lookups, [instance.instanceId, instance.instanceId]);
-      assert.deepEqual(hubLookups, [["cursor", "http://hub.test:8317", "gpt-5.4"]]);
-      yield* Deferred.await(refreshed);
-    }).pipe(
-      Effect.provide(makeLayerTest(layerTestEventSink, instances)),
-      Effect.provideService(UsageLimitResetFallback, {
-        resetAt: (driver, endpoint, model) =>
-          Effect.sync(() => {
-            hubLookups.push([driver, endpoint, model]);
-            return "2026-11-13T18:00:00.000Z";
-          }),
-      }),
-    );
-  }),
-);
 
 it.effect(
   "reports invalid provider questions as typed errors and still ingests valid questions",

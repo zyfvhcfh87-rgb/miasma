@@ -19,7 +19,6 @@ export {
   parseGrokModelsCliOutput,
 } from "./server/status.ts";
 export { makeGrokTextGeneration } from "./server/textGeneration.ts";
-export { grokUsageResponseToLimits, readGrokAccount } from "./server/usageLimits.ts";
 export {
   extractXAiAcpSubagentUpdate,
   makeXAiPromptCompletionRuntime,

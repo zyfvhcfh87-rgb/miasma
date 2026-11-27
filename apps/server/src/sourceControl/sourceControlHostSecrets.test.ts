@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { DeviceHostId, SecretProviderId, UsageLimitSourceId } from "@t3tools/contracts";
+import { DeviceHostId, SecretProviderId } from "@t3tools/contracts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as Effect from "effect/Effect";
 
@@ -127,20 +127,6 @@ it.effect("reads a collected reference again once it is invalidated", () =>
         }),
     });
     const read = () => resolveSourceControlHostSecrets(resolver, hosts, "bitbucket");
-    const usageLimitSources = {
-      [UsageLimitSourceId.make("referenced")]: {
-        kind: "cliproxy",
-        url: "https://hub.test",
-        managementKey: source("cliproxy#key"),
-        enabled: true,
-      },
-      [UsageLimitSourceId.make("literal")]: {
-        kind: "cliproxy",
-        url: "https://hub.test",
-        managementKey: "plain-key",
-        enabled: true,
-      },
-    } as const;
     const easDeviceHosts = [
       {
         kind: "eas" as const,
@@ -163,7 +149,6 @@ it.effect("reads a collected reference again once it is invalidated", () =>
         maxLeaseMinutes: 60,
       },
     ];
-    cache.set("cliproxy#key", "stale");
     cache.set("voice#key", "stale");
     cache.set("expo#token", "stale");
     cache.set("simlock#token", "stale");
@@ -177,13 +162,11 @@ it.effect("reads a collected reference again once it is invalidated", () =>
       Effect.succeed({
         sourceControlHosts: hosts,
         cloudSpeechCredentials: { openai: source("voice#key"), xai: "", openrouter: "" },
-        usageLimitSources,
         textGenerators: {},
         easDeviceHosts,
         simlockDeviceHosts,
       }),
     );
-    assert.isFalse(cache.has("cliproxy#key"));
     assert.isFalse(cache.has("voice#key"));
     assert.isFalse(cache.has("expo#token"));
     assert.isFalse(cache.has("simlock#token"));

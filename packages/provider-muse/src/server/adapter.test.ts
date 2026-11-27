@@ -38,11 +38,10 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
-import type { MuseItem, MuseSubscriptionUsage } from "./protocol.ts";
+import type { MuseItem } from "./protocol.ts";
 import type { MuseSdkHost, MuseSdkHostOptions } from "./sdk.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
-import type { ProviderUsageLimitsReport } from "@t3tools/provider-core/server/snapshot";
 import type * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import { makeMuseAdapterV2, type MuseAdapterV2Options } from "./adapter.ts";
 
@@ -209,7 +208,7 @@ const makeHarness = Effect.fnUntraced(function* (
   policy = runtimePolicy,
   overrides: Pick<
     MuseAdapterV2Options,
-    "createHost" | "nativeEventLogger" | "modelCatalog" | "continuationRequests" | "onUsageLimits"
+    "createHost" | "nativeEventLogger" | "modelCatalog" | "continuationRequests"
   > = {},
 ) {
   let hostCount = 0;
@@ -361,12 +360,6 @@ const startConversation = Effect.fnUntraced(function* (
   return { nativeId: call.commandId!, providerTurn: event.providerTurn };
 });
 
-const SUBSCRIPTION_USAGE = {
-  window: { usedPercent: 0, windowDurationMins: 300, resetsAtMs: 1791465557000 },
-  weekly: { usedPercent: 5, resetsAtMs: 1791763200000 },
-  tier: "tier-1",
-  observedAtMs: 1791447762610,
-} satisfies MuseSubscriptionUsage;
 const QUOTA_MESSAGE =
   "API error 429: Subscription quota exhausted. Your usage window resets soon. (rate_limit_error)";
 const RELAYED_QUOTA_MESSAGE =
@@ -618,10 +611,9 @@ describe("MuseAdapterV2", () => {
     ),
   );
 
-  it.effect("stops at a Meta usage limit until every exhausted window resets", () =>
+  it.effect("classifies a Meta usage-limit refusal as usage_limit", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakeMuse();
-      const reports: Array<ProviderUsageLimitsReport> = [];
       const harness = yield* makeHarness(
         fake,
         INSTANCE_ID,
@@ -629,12 +621,7 @@ describe("MuseAdapterV2", () => {
         undefined,
         undefined,
         runtimePolicy,
-        { onUsageLimits: (report) => Effect.sync(() => void reports.push(report)) },
       );
-      yield* fake.emitHostWide("usage/changed", {
-        ...SUBSCRIPTION_USAGE,
-        window: { ...SUBSCRIPTION_USAGE.window, usedPercent: 103 },
-      });
       const { nativeId } = yield* startConversation(harness, fake);
       yield* fake.emit("turn/completed", {
         turnId: nativeId,
@@ -646,11 +633,6 @@ describe("MuseAdapterV2", () => {
       assert.strictEqual(terminal.status, "failed");
       assert.strictEqual(terminal.threadDisposition, "reusable");
       assert.strictEqual(terminal.failure?.class, "usage_limit");
-      assert.strictEqual(terminal.failure?.resetAt, "2026-10-08T13:19:17.000Z");
-      assert.deepStrictEqual(
-        reports.map((report) => [report.authLabel, report.windows[0]?.usedPercent]),
-        [["tier-1", 100]],
-      );
       assert.isTrue(
         harness.allEvents.some(
           (event) =>
@@ -685,59 +667,6 @@ describe("MuseAdapterV2", () => {
       const terminal = yield* harness.takeEvent("turn.terminal");
       assert.strictEqual(terminal.failure?.class, "usage_limit");
       assert.strictEqual(terminal.failure?.resetAt, "2026-10-13T10:45:52.000Z");
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
-  it.effect("limits a stop Muse types as quota at the reset it reports", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakeMuse();
-      const harness = yield* makeHarness(fake);
-      const { nativeId } = yield* startConversation(harness, fake);
-      yield* fake.emit("turn/completed", {
-        turnId: nativeId,
-        terminal: "failed",
-        error: {
-          kind: "modelError",
-          message: "Model request refused.",
-          quota: { limitKind: "tierLimit", resetsAtMs: SUBSCRIPTION_USAGE.window.resetsAtMs },
-          retryable: true,
-        },
-      });
-      const terminal = yield* harness.takeEvent("turn.terminal");
-      assert.strictEqual(terminal.failure?.class, "usage_limit");
-      assert.strictEqual(terminal.failure?.resetAt, "2026-10-08T13:19:17.000Z");
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
-  it.effect("skips an unreadable usage report without ending the session", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakeMuse();
-      const reports: Array<ProviderUsageLimitsReport> = [];
-      const harness = yield* makeHarness(
-        fake,
-        INSTANCE_ID,
-        undefined,
-        undefined,
-        undefined,
-        runtimePolicy,
-        { onUsageLimits: (report) => Effect.sync(() => void reports.push(report)) },
-      );
-      yield* fake.emitHostWide("usage/changed", { window: "not usage" });
-      yield* fake.emitHostWide("usage/changed", {
-        ...SUBSCRIPTION_USAGE,
-        window: { ...SUBSCRIPTION_USAGE.window, usedPercent: 103, resetsAtMs: 1e16 },
-      });
-      const { nativeId } = yield* startConversation(harness, fake);
-      yield* fake.emit("turn/completed", {
-        turnId: nativeId,
-        terminal: "failed",
-        error: { message: QUOTA_MESSAGE },
-      });
-      const terminal = yield* harness.takeEvent("turn.terminal");
-      assert.strictEqual(terminal.failure?.class, "usage_limit");
-      assert.isUndefined(terminal.failure?.resetAt);
-      assert.deepStrictEqual(reports, []);
-      assert.strictEqual(fake.closeCount(), 0);
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 

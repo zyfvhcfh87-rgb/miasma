@@ -97,13 +97,6 @@ export const resolveSourceControlHostSecrets = Effect.fn("SourceControlHost.reso
   },
 );
 
-const collectUsageLimitSecretReferences = (
-  sources: ServerSettings["usageLimitSources"],
-): ReadonlyArray<SecretReference> =>
-  Object.values(sources).flatMap(({ managementKey }) =>
-    isSecretReference(managementKey) ? [managementKey] : [],
-  );
-
 const collectDeviceHostSecretReferences = (
   settings: Pick<ServerSettings, "easDeviceHosts" | "simlockDeviceHosts">,
 ): ReadonlyArray<SecretReference> =>
@@ -119,7 +112,6 @@ export const invalidateSettingsSecrets = Effect.fn("SettingsSecrets.invalidate")
     Pick<
       ServerSettings,
       | "sourceControlHosts"
-      | "usageLimitSources"
       | "textGenerators"
       | "easDeviceHosts"
       | "simlockDeviceHosts"
@@ -131,7 +123,6 @@ export const invalidateSettingsSecrets = Effect.fn("SettingsSecrets.invalidate")
   const references = yield* settings.pipe(
     Effect.map((current) => [
       ...collectSourceControlHostSecretReferences(current.sourceControlHosts),
-      ...collectUsageLimitSecretReferences(current.usageLimitSources),
       ...Object.values(current.textGenerators).flatMap(({ apiKey }) =>
         isSecretReference(apiKey) ? [apiKey] : [],
       ),

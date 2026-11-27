@@ -1,6 +1,6 @@
 import type { ServerProvider } from "@t3tools/contracts";
 
-const CHECKED_AT_ONLY_KEYS = new Set(["usageLimits", "versionAdvisory"]);
+const CHECKED_AT_ONLY_KEYS = new Set(["versionAdvisory"]);
 
 function sameIgnoringCheckedAt(previous: object, next: object, nested: boolean): boolean {
   const before = previous as Record<string, unknown>;

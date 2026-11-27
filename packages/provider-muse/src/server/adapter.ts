@@ -51,7 +51,6 @@ import {
   MuseDelta,
   MuseItemEvent,
   MuseSessionResult,
-  MuseSubscriptionUsage,
   MuseTokenUsageEvent,
   MuseTodoList,
   MuseRetryScheduled,
@@ -64,11 +63,6 @@ import {
   type MuseItem,
 } from "./protocol.ts";
 import {
-  isMuseUsageLimitFailure,
-  museUsageLimitResetAt,
-  museUsageToLimits,
-} from "./usageLimits.ts";
-import {
   createMuseSdkHostEffect,
   MuseSdkError,
   museApprovalMode,
@@ -79,7 +73,6 @@ import {
   type MuseSdkHost,
 } from "./sdk.ts";
 import type * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
-import type { ManagedServerProvider } from "@t3tools/provider-core/server/snapshot";
 import {
   providerMessageTextWithAttachmentPaths,
   isProviderNativeImageAttachment,
@@ -208,8 +201,6 @@ export interface MuseAdapterV2Options {
   readonly createHost?: typeof createMuseSdkHost;
   readonly requestTimeoutMs?: number;
   readonly nativeEventLogger?: ProviderEventLoggers.EventNdjsonLogger;
-  /** Receives every account-wide usage report, whichever session's host sent it. */
-  readonly onUsageLimits?: ManagedServerProvider["applyUsageLimits"];
   readonly continuationRequests?: {
     readonly offer: (
       request: ProviderContinuationRequests.ProviderContinuationRequest,
@@ -276,13 +267,29 @@ const nativeRef = (nativeId: string) => ({
 const backgroundTaskId = (item: MuseItem) =>
   item.kind === "subagent" ? item.childSessionId || item.subagentId || item.itemId : item.itemId;
 const recordSchema = Schema.Record(Schema.String, Schema.Unknown);
+/** Credential proxies may drop structured quota fields from 429 refusals; inspect the text too. */
+function isMuseUsageLimitFailure(message: string | undefined): boolean {
+  return message !== undefined && /\b429\b/.test(message) && /quota|usage limit/i.test(message);
+}
+
+const NAMED_RESET =
+  /\bresets at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))/i;
+
+/** The reset a usage-limit refusal names in its message, when it is still in the future. */
+function museUsageLimitResetAt(message: string | undefined, nowMs: number): string | null {
+  const named = message?.match(NAMED_RESET)?.[1];
+  const ms = named === undefined ? undefined : Date.parse(named);
+  return ms !== undefined && Number.isFinite(ms) && ms > nowMs
+    ? DateTime.formatIso(DateTime.makeUnsafe(ms))
+    : null;
+}
+
 const INFORMATIONAL_NOTIFICATIONS = new Set([
   "session/contextUsage",
   "session/tokenUsage",
   "session/todoListChanged",
   "turn/retryScheduled",
   "turn/modelRetryScheduled",
-  "usage/changed",
 ]);
 const TOOLS_WITH_NATIVE_ROWS = new Set(["write_todos", "request_user_input", "workflow"]);
 // Reminder children and other runtime items can start while the model is still retrying.
@@ -359,7 +366,6 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
       let hasT3Mcp = false;
       let active: ActiveTurn | undefined;
       let lastProviderTurn: OrchestrationV2ProviderTurn | undefined;
-      let latestSubscriptionUsage: MuseSubscriptionUsage | undefined;
       const agentEndedAt = new Map<string, DateTime.Utc>();
       const resolveModel = Effect.fnUntraced(function* (selection: ModelSelection) {
         if (selection.model !== MUSE_DEFAULT_MODEL) return selection.model;
@@ -1042,7 +1048,6 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
         status: "completed" | "cancelled" | "interrupted" | "failed",
         detail?: string,
         disposition: "reusable" | "broken" = "reusable",
-        quota?: { readonly resetsAtMs: number },
       ) {
         if (active !== turn || seenTerminals.has(turn.nativeId)) return;
         seenTerminals.add(turn.nativeId);
@@ -1080,8 +1085,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
         yield* updateSession(disposition === "broken" ? "error" : "ready", detail ?? null);
         active = undefined;
         if (status === "failed") {
-          const usageLimited =
-            disposition === "reusable" && (quota !== undefined || isMuseUsageLimitFailure(detail));
+          const usageLimited = disposition === "reusable" && isMuseUsageLimitFailure(detail);
           const failure = makeProviderFailure({
             class:
               disposition === "broken"
@@ -1091,13 +1095,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                   : "provider_error",
             message: detail ?? "Muse turn failed.",
             ...(usageLimited
-              ? {
-                  resetAt: museUsageLimitResetAt(
-                    latestSubscriptionUsage,
-                    DateTime.toEpochMillis(completedAt),
-                    { quota, message: detail },
-                  ),
-                }
+              ? { resetAt: museUsageLimitResetAt(detail, DateTime.toEpochMillis(completedAt)) }
               : {}),
           });
           const base = baseItem(turn, `failure:${turn.nativeId}`, completedAt);
@@ -1400,14 +1398,6 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
       });
       const handleNotification = Effect.fnUntraced(function* (method: string, data: unknown) {
         const params = yield* decode(recordSchema, data);
-        // usage/changed is account-wide and carries no session ID.
-        if (method === "usage/changed") {
-          latestSubscriptionUsage = yield* decode(MuseSubscriptionUsage, params);
-          if (options.onUsageLimits) {
-            yield* options.onUsageLimits(museUsageToLimits(latestSubscriptionUsage));
-          }
-          return;
-        }
         if (params.sessionId !== nativeSessionId) return;
         if (method === "view/gap")
           return yield* protocolError("Muse delivery gap requires session recovery");
@@ -1585,13 +1575,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                     ? "interrupted"
                     : "cancelled"
                   : "failed";
-            yield* finish(
-              turn,
-              status,
-              result.error?.message ?? result.reason,
-              "reusable",
-              result.error?.quota,
-            );
+            yield* finish(turn, status, result.error?.message ?? result.reason, "reusable");
             break;
           }
           case "approval/requested":

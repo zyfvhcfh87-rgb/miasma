@@ -17,7 +17,6 @@ import {
   latestUnheldRun,
   runRanAfter,
   threadErrorSummary,
-  usageLimitRunPresentedAsLatest,
 } from "@t3tools/shared/orchestrationV2ThreadError";
 import { threadPullRequestsOf } from "../sourceControl/threadPullRequests.ts";
 import {
@@ -193,22 +192,6 @@ export type ProjectionRecoveryKind =
   | "subagent-results"
   | "delegated-completions"
   | "unread-steers";
-
-export type ProjectionLimitRecoveryCandidate = Pick<
-  OrchestrationV2ThreadShell,
-  | "id"
-  | "status"
-  | "lastErrorClass"
-  | "latestRunId"
-  | "usageLimitResetAt"
-  | "archivedAt"
-  | "settledOverride"
-  | "pendingRuntimeRequest"
-  | "latestRunCompletedAt"
-  | "updatedAt"
-  | "limitRecovery"
-  | "snoozedUntil"
->;
 
 export type ProjectionThreadPullRequests = Pick<
   OrchestrationV2AppThread,
@@ -672,15 +655,6 @@ export interface ProjectionStoreV2Shape {
   readonly findThread: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2AppThread | null, ProjectionStoreV2Error>;
-  readonly getLimitRecoveryCandidates: (options: {
-    readonly now: DateTime.Utc;
-    readonly autoResume: boolean;
-    readonly snooze: boolean;
-  }) => Effect.Effect<ReadonlyArray<ProjectionLimitRecoveryCandidate>, ProjectionStoreV2Error>;
-  /** Epoch ms of the next armed reset or snooze end after `now`, when a waiting thread becomes a candidate. */
-  readonly getLimitRecoveryWakeAt: (
-    now: DateTime.Utc,
-  ) => Effect.Effect<number | null, ProjectionStoreV2Error>;
   readonly getSettlementCandidates: (
     threadId?: ThreadId,
   ) => Effect.Effect<ReadonlyArray<ProjectionSettlementCandidate>, ProjectionStoreV2Error>;
@@ -1274,13 +1248,6 @@ type ShellThreadRow = {
   readonly activity_run_started_at: string | null;
   readonly last_error: string | null;
   readonly terminal_failure_payload_json: string | null;
-  readonly blocking_run_id: string | null;
-  readonly blocking_run_requested_at: string | null;
-  readonly blocking_run_started_at: string | null;
-  readonly blocking_run_completed_at: string | null;
-  readonly blocking_run_stop_requested: number;
-  readonly blocking_run_background_wake: number;
-  readonly blocking_failure_payload_json: string | null;
   readonly pending_request_payload_json: string | null;
   readonly pending_secret_request_payload_json: string | null;
   readonly pending_link_request_payload_json: string | null;
@@ -1865,12 +1832,7 @@ export function threadShellFromProjection(
   // Miasma's own idle compactions stay out of the shell unless they fail, so thread lists,
   // notifications and the relay keep presenting the user's last turn.
   const runs = projection.runs.filter((run) => !isSilentRunForShell(run, projection));
-  const latestRun =
-    usageLimitRunPresentedAsLatest(
-      runs,
-      projection.turnItems,
-      providerSession?.lastError ?? null,
-    ) ?? latestUnheldRun(runs);
+  const latestRun = latestUnheldRun(runs);
   const activeRun =
     runs
       .filter(isInterruptibleRunForShell)
@@ -2024,7 +1986,6 @@ export function threadShellFromProjection(
     opens: projection.thread.opens ?? null,
     titleRegeneration: projection.thread.titleRegeneration ?? null,
     lastTitleRegeneration: projection.thread.lastTitleRegeneration ?? null,
-    limitRecovery: projection.thread.limitRecovery ?? null,
     deletedAt: projection.thread.deletedAt,
   };
 }
@@ -2121,7 +2082,6 @@ type ShellThreadState = {
   readonly lastError: string | null;
   readonly lastErrorClass: OrchestrationV2ThreadShell["lastErrorClass"];
   readonly lastErrorCode: OrchestrationV2ThreadShell["lastErrorCode"];
-  readonly usageLimitResetAt: OrchestrationV2ThreadShell["usageLimitResetAt"];
   readonly pendingRuntimeRequest: OrchestrationV2PendingRuntimeRequestSummary | null;
   readonly latestUserMessageAt: DateTime.Utc | null;
   readonly latestUserAuthoredMessageAt: DateTime.Utc | null;
@@ -2296,7 +2256,6 @@ function shellFromState(input: {
     lastError: input.state.lastError,
     lastErrorClass: input.state.lastErrorClass,
     lastErrorCode: input.state.lastErrorCode,
-    usageLimitResetAt: input.state.usageLimitResetAt,
     pendingRuntimeRequest: input.state.pendingRuntimeRequest,
     pendingGuestMessageCount: pendingGuestMessageCount(input.state.thread.guestShare),
     latestVisibleMessage: null,
@@ -2325,7 +2284,6 @@ function shellFromState(input: {
     opens: input.state.thread.opens ?? null,
     titleRegeneration: input.state.thread.titleRegeneration ?? null,
     lastTitleRegeneration: input.state.thread.lastTitleRegeneration ?? null,
-    limitRecovery: input.state.thread.limitRecovery ?? null,
     deletedAt: input.state.thread.deletedAt,
   };
 }
@@ -4973,165 +4931,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               : new ProjectionStoreReadError({ threadId, cause }),
           ),
         ),
-    );
-
-    const getLimitRecoveryCandidates = Effect.fn("ProjectionStore.getLimitRecoveryCandidates")(
-      function* (options: Parameters<ProjectionStoreV2Shape["getLimitRecoveryCandidates"]>[0]) {
-        const rows = yield* sql<{
-          readonly payload_json: string;
-          readonly run_id: string;
-          readonly completed_at: string | null;
-          readonly failure_payload_json: string;
-          readonly last_error: string | null;
-        }>`
-          SELECT t.payload_json, r.run_id, r.completed_at,
-            item.payload_json AS failure_payload_json,
-            (
-              SELECT json_extract(session.payload_json, '$.lastError')
-              -- Keep bindings outermost: one provider instance can hold every session.
-              FROM orchestration_v2_projection_provider_session_bindings binding
-              CROSS JOIN orchestration_v2_projection_provider_sessions session
-                ON session.provider_session_id = binding.provider_session_id
-              WHERE binding.thread_id = t.thread_id
-                AND session.provider_instance_id = t.provider_instance_id
-              ORDER BY session.updated_at DESC, session.provider_session_id DESC
-              LIMIT 1
-            ) AS last_error
-          FROM orchestration_v2_projection_threads t
-          INNER JOIN orchestration_v2_projection_runs r ON r.run_id = (
-            SELECT latest.run_id FROM orchestration_v2_projection_runs latest
-            WHERE latest.thread_id = t.thread_id
-              AND latest.status <> 'queued'
-              AND NOT (
-                latest.status = 'cancelled'
-                AND json_extract(latest.payload_json, '$.startedAt') IS NULL
-              )
-            -- latestExecutedRun: the run that ended last (runRanAfter).
-            ORDER BY latest.completed_at IS NULL DESC, latest.completed_at DESC,
-              latest.ordinal DESC, latest.run_id DESC
-            LIMIT 1
-          ) AND r.status = 'failed'
-          INNER JOIN orchestration_v2_projection_turn_items item ON item.turn_item_id = (
-            SELECT error.turn_item_id FROM orchestration_v2_projection_turn_items error
-            WHERE error.thread_id = t.thread_id AND error.run_id = r.run_id
-              AND error.type = 'error' AND error.status = 'failed'
-              AND error.node_id IS json_extract(r.payload_json, '$.rootNodeId')
-            ORDER BY error.updated_at DESC, error.ordinal DESC, error.turn_item_id DESC
-            LIMIT 1
-          )
-          WHERE t.deleted_at IS NULL
-            -- The sweep runs every scheduler tick. Without this list the latest-run
-            -- lookup above sorts every run of every thread, tens of milliseconds
-            -- for one long thread; only threads with a usage-limit failure qualify.
-            AND t.thread_id IN (
-              SELECT failure.thread_id FROM orchestration_v2_projection_turn_items failure
-              -- Spelled as in 099_BackgroundRecoveryIndexes so the partial index serves it.
-              WHERE failure.type = 'error' AND failure.status = 'failed'
-                AND CASE WHEN json_valid(failure.payload_json) THEN
-                  json_extract(failure.payload_json, '$.failure.class') = 'usage_limit'
-                  ELSE 0 END
-            )
-            AND t.archived_at IS NULL
-            AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
-            AND json_valid(item.payload_json)
-            AND json_extract(item.payload_json, '$.failure.class') = 'usage_limit'
-            AND json_extract(item.payload_json, '$.failure.resetAt') IS NOT NULL
-            AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) > julianday(COALESCE(r.completed_at, json_extract(t.payload_json, '$.updatedAt')))
-            AND (
-              (
-                json_extract(t.payload_json, '$.limitRecovery.runId') IS r.run_id
-                AND json_extract(t.payload_json, '$.limitRecovery.resetAt') IS json_extract(item.payload_json, '$.failure.resetAt')
-                AND json_extract(t.payload_json, '$.limitRecovery.autoResume') = 1
-                AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) <= julianday(${DateTime.formatIso(options.now)})
-                AND (
-                  json_extract(t.payload_json, '$.snoozedUntil') IS NULL
-                  OR julianday(json_extract(t.payload_json, '$.snoozedUntil')) <= julianday(${DateTime.formatIso(options.now)})
-                )
-              )
-              OR (
-                (
-                  json_extract(t.payload_json, '$.limitRecovery.runId') IS NOT r.run_id
-                  OR json_extract(t.payload_json, '$.limitRecovery.resetAt') IS NOT json_extract(item.payload_json, '$.failure.resetAt')
-                )
-                AND (
-                  ${booleanInt(options.autoResume)}
-                  OR (${booleanInt(options.snooze)} AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) > julianday(${DateTime.formatIso(options.now)}))
-                )
-                -- A subagent of a settled, archived or deleted parent is abandoned work.
-                AND NOT EXISTS (
-                  SELECT 1 FROM orchestration_v2_projection_threads parent
-                  WHERE json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
-                    AND parent.thread_id = json_extract(t.payload_json, '$.lineage.parentThreadId')
-                    AND (
-                      json_extract(parent.payload_json, '$.settledOverride') = 'settled'
-                      OR json_extract(parent.payload_json, '$.archivedAt') IS NOT NULL
-                      OR parent.deleted_at IS NOT NULL
-                    )
-                )
-              )
-            )
-            AND NOT EXISTS (
-              SELECT 1 FROM orchestration_v2_projection_runtime_requests request
-              WHERE request.thread_id = t.thread_id AND request.status = 'pending'
-            )
-          ORDER BY t.thread_id
-        `;
-        const candidates: Array<ProjectionLimitRecoveryCandidate> = [];
-        for (const row of rows) {
-          const thread = yield* decodeThreadPayload(row.payload_json);
-          const item = yield* decodeTurnItemPayload(row.failure_payload_json);
-          const summary = threadErrorSummary(
-            item.type === "error" ? item.failure : null,
-            row.last_error,
-          );
-          if (summary.lastErrorClass !== "usage_limit") continue;
-          candidates.push({
-            id: thread.id,
-            status: "failed",
-            lastErrorClass: summary.lastErrorClass,
-            usageLimitResetAt: summary.usageLimitResetAt,
-            latestRunId: RunId.make(row.run_id),
-            latestRunCompletedAt:
-              row.completed_at === null ? null : DateTime.makeUnsafe(row.completed_at),
-            updatedAt: thread.updatedAt,
-            archivedAt: thread.archivedAt,
-            settledOverride: thread.settledOverride,
-            pendingRuntimeRequest: null,
-            limitRecovery: thread.limitRecovery ?? null,
-            snoozedUntil: thread.snoozedUntil ?? null,
-          });
-        }
-        return candidates;
-      },
-      Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
-    );
-
-    const getLimitRecoveryWakeAt = Effect.fn("ProjectionStore.getLimitRecoveryWakeAt")(
-      function* (now: DateTime.Utc) {
-        const nowIso = DateTime.formatIso(now);
-        const rows = yield* sql<{
-          readonly reset_ms: number | null;
-          readonly snooze_ms: number | null;
-        }>`
-          SELECT
-            MIN(CASE WHEN julianday(reset_at) > julianday(${nowIso})
-              THEN (julianday(reset_at) - 2440587.5) * 86400000 END) AS reset_ms,
-            MIN(CASE WHEN julianday(snoozed_until) > julianday(${nowIso})
-              THEN (julianday(snoozed_until) - 2440587.5) * 86400000 END) AS snooze_ms
-          FROM (
-            SELECT json_extract(payload_json, '$.limitRecovery.resetAt') AS reset_at,
-              json_extract(payload_json, '$.snoozedUntil') AS snoozed_until
-            FROM orchestration_v2_projection_threads
-            WHERE deleted_at IS NULL
-              AND json_extract(payload_json, '$.limitRecovery.autoResume') = 1
-          )
-        `;
-        const wakes = [rows[0]?.reset_ms, rows[0]?.snooze_ms].filter(
-          (value): value is number => value != null,
-        );
-        return wakes.length === 0 ? null : Math.round(Math.min(...wakes));
-      },
-      Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
     );
 
     const getRecoveryThreadIds = Effect.fn("ProjectionStore.getRecoveryThreadIds")(
@@ -8493,26 +8292,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 ORDER BY item.updated_at DESC, item.ordinal DESC, item.turn_item_id DESC
                 LIMIT 1
               ) AS terminal_failure_payload_json,
-              blocked.run_id AS blocking_run_id,
-              blocked.requested_at AS blocking_run_requested_at,
-              json_extract(blocked.payload_json, '$.startedAt') AS blocking_run_started_at,
-              blocked.completed_at AS blocking_run_completed_at,
-              EXISTS (
-                SELECT 1 FROM orchestration_v2_projection_turn_items stop_request
-                WHERE stop_request.thread_id = t.thread_id AND stop_request.run_id = blocked.run_id
-                  AND stop_request.type = 'run_interrupt_request'
-              ) AS blocking_run_stop_requested,
-              ${isBackgroundWakeShellRun("blocked")} AS blocking_run_background_wake,
-              (
-                SELECT item.payload_json
-                FROM orchestration_v2_projection_turn_items item
-                WHERE item.thread_id = t.thread_id
-                  AND item.run_id = blocked.run_id
-                  AND item.type = 'error' AND item.status = 'failed'
-                  AND item.node_id IS json_extract(blocked.payload_json, '$.rootNodeId')
-                ORDER BY item.updated_at DESC, item.ordinal DESC, item.turn_item_id DESC
-                LIMIT 1
-              ) AS blocking_failure_payload_json,
               (
                 SELECT request.payload_json
                 FROM orchestration_v2_projection_runtime_requests request
@@ -8584,20 +8363,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             )
             LEFT JOIN orchestration_v2_projection_runs presented
               ON presented.run_id = ${presentedShellRunId(sql.literal("t.thread_id"))}
-            LEFT JOIN orchestration_v2_projection_runs blocked ON blocked.run_id = (
-              SELECT candidate.run_id
-              FROM orchestration_v2_projection_runs candidate
-              WHERE candidate.thread_id = t.thread_id
-                AND candidate.status <> 'queued'
-                AND NOT (
-                  candidate.status = 'cancelled'
-                  AND json_extract(candidate.payload_json, '$.startedAt') IS NULL
-                )
-              -- latestExecutedRun: the run that ended last (runRanAfter).
-              ORDER BY candidate.completed_at IS NULL DESC, candidate.completed_at DESC,
-                candidate.ordinal DESC, candidate.run_id DESC
-              LIMIT 1
-            ) AND blocked.status = 'failed'
             WHERE ${includeDeleted ? sql`1 = 1` : sql`t.deleted_at IS NULL`}${
               listedOnly
                 ? sql` AND json_extract(t.payload_json, '$.lineage.relationshipToParent') IS NOT 'subagent'
@@ -9163,35 +8928,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             : DateTime.makeUnsafe(row.latest_run_completed_at);
         let latestRunStopRequested = row.latest_run_stop_requested === 1;
         let latestRunBackgroundWake = row.latest_run_background_wake === 1;
-        if (row.blocking_run_id !== null && row.blocking_failure_payload_json !== null) {
-          const blockingFailure = yield* decodeTurnItemPayload(
-            row.blocking_failure_payload_json,
-          ).pipe(Effect.orElseSucceed(() => null));
-          const blocksQueue =
-            threadErrorSummary(
-              blockingFailure?.type === "error" ? blockingFailure.failure : null,
-              row.last_error,
-            ).lastErrorClass === "usage_limit";
-          if (blocksQueue && blockingFailure !== null) {
-            terminalFailureItem = blockingFailure;
-            latestRunId = RunId.make(row.blocking_run_id);
-            latestRunStopRequested = row.blocking_run_stop_requested === 1;
-            latestRunBackgroundWake = row.blocking_run_background_wake === 1;
-            latestRunStatus = "failed";
-            latestRunRequestedAt =
-              row.blocking_run_requested_at === null
-                ? null
-                : DateTime.makeUnsafe(row.blocking_run_requested_at);
-            latestRunStartedAt =
-              row.blocking_run_started_at === null
-                ? null
-                : DateTime.makeUnsafe(row.blocking_run_started_at);
-            latestRunCompletedAt =
-              row.blocking_run_completed_at === null
-                ? null
-                : DateTime.makeUnsafe(row.blocking_run_completed_at);
-          }
-        }
         const pendingBackgroundTasks = [
           ...derivePendingBackgroundWork({
             latestRun:
@@ -9950,8 +9686,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getRuntimeRequest: readOnReader(getRuntimeRequest),
       getPlan: readOnReader(getPlan),
       getProviderControlContext: readOnReader(getProviderControlContext),
-      getLimitRecoveryCandidates: readOnReader(getLimitRecoveryCandidates),
-      getLimitRecoveryWakeAt: readOnReader(getLimitRecoveryWakeAt),
       getRecoveryThreadIds: readOnReader(getRecoveryThreadIds),
       getUnreadableThreadIds: readOnReader(getUnreadableThreadIds),
       getThreadSnapshot: readOnReader(getThreadSnapshot),

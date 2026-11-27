@@ -557,12 +557,6 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarAutoSettleOnMerge !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge
       ? [gt("Auto-settle merged threads")]
       : []),
-    ...(settings.autoResumeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads
-      ? [gt("Resume after usage limits")]
-      : []),
-    ...(settings.snoozeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads
-      ? [gt("Snooze until limits reset")]
-      : []),
     ...(!Equal.equals(settings.snoozePresets, DEFAULT_UNIFIED_SETTINGS.snoozePresets)
       ? [gt("Snooze options")]
       : []),
@@ -572,7 +566,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       ? [gt("Composer context")]
       : []),
     ...(settings.showComposerUsageMeter !== DEFAULT_UNIFIED_SETTINGS.showComposerUsageMeter
-      ? [gt("Composer usage limits")]
+      ? [gt("Composer usage meter")]
       : []),
     ...getChangedTypographySettingLabels(settings, messages),
     ...(settings.diffFilesCollapsed !== DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed
@@ -746,8 +740,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
-      autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
-      snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
       snoozePresets: DEFAULT_UNIFIED_SETTINGS.snoozePresets,
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
@@ -2066,45 +2058,6 @@ export function ThreadsSettingsPanel() {
           <SnoozePresetsRow />
         </SettingsSection>
       ) : null}
-
-      <SettingsSection id="usage-limits" title={gt("Usage limits")}>
-        <SettingsRow
-          serverScoped
-          {...setting("auto-resume-limited-threads")}
-          description={gt(
-            "Automatically resume threads when their usage limits reset. You can cancel auto-resume in each thread.",
-          )}
-          settingKeys={["autoResumeLimitedThreads"]}
-          control={
-            <ScopedSwitch
-              settingKeys={["autoResumeLimitedThreads"]}
-              checked={settings.autoResumeLimitedThreads}
-              onCheckedChange={(checked) =>
-                updateSettings({ autoResumeLimitedThreads: Boolean(checked) })
-              }
-              aria-label={gt("Resume after usage limits")}
-            />
-          }
-        />
-        <SettingsRow
-          serverScoped
-          {...setting("snooze-limited-threads")}
-          description={gt(
-            "Snooze threads until their usage limits reset. Enable auto-resume to continue the agent after the reset.",
-          )}
-          settingKeys={["snoozeLimitedThreads"]}
-          control={
-            <ScopedSwitch
-              settingKeys={["snoozeLimitedThreads"]}
-              checked={settings.snoozeLimitedThreads}
-              onCheckedChange={(checked) =>
-                updateSettings({ snoozeLimitedThreads: Boolean(checked) })
-              }
-              aria-label={gt("Snooze until limits reset")}
-            />
-          }
-        />
-      </SettingsSection>
 
       {hasServerTargets ? (
         <SettingsSection id="auto-settle" title={gt("Auto-settle")}>

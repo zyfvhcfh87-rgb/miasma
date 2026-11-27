@@ -1,8 +1,6 @@
 import { ActiveNewTaskContext } from "../../state/active-new-task";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import { msg, useMessages } from "gt-react-native";
-import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
-import { useNowMinuteMs } from "../../lib/clock";
 import { m, type MessageResolver } from "../../i18n/messages";
 import * as Dialog from "../../components/ui/Dialog";
 import React, { useRef, useState } from "react";
@@ -362,7 +360,6 @@ export function NewTaskFlowProvider(
 
   const linkedEnvironments = useLinkedEnvironments(selectedProject?.environmentId ?? null);
   const storedStickyModelSelection = useStickyComposerModelSelection();
-  const modelSelectionNow = useNowMinuteMs();
   const projectDefaults = useNewTaskProjectDefaults(selectedProject);
   const isScratchDraft = projectDefaults.isScratch;
   const serverConfigs = useServerConfigs();
@@ -485,18 +482,10 @@ export function NewTaskFlowProvider(
     stickySelection: stickyModelSelection,
     modelOptions,
   });
-  const selectedModel = resolveNewThreadModelSelection({
-    defaultSelection: selectedDefaultModel,
-    explicitSelection:
-      draftModelSelection ?? (projectDefaultModelSelection ? null : stickyModelSelection),
-    fallbackSelection: selectedEnvironmentServerConfig?.settings.fallbackModelSelection ?? null,
-    providers: selectedEnvironmentServerConfig?.providers ?? [],
-    ...(selectedEnvironmentServerConfig
-      ? { settings: selectedEnvironmentServerConfig.settings }
-      : {}),
-    projectId: selectedProject?.id ?? null,
-    now: modelSelectionNow,
-  }).selection;
+  const selectedModel =
+    draftModelSelection ??
+    (projectDefaultModelSelection ? null : stickyModelSelection) ??
+    selectedDefaultModel;
   const selectedModelKey = selectedModel
     ? `${selectedModel.instanceId}:${selectedModel.model}`
     : null;

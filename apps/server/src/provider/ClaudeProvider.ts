@@ -8,7 +8,6 @@ import {
   type ServerProvider,
   type ServerProviderModel,
   type ServerProviderSlashCommand,
-  type ServerProviderResetCredits,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -16,7 +15,6 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -30,7 +28,6 @@ import {
   type ModelInfo as ClaudeModelInfo,
   type Options as ClaudeQueryOptions,
   type SlashCommand as ClaudeSlashCommand,
-  type SDKControlGetUsageResponse,
   type SDKUserMessage,
   type SettingSource,
   type SpawnOptions as ClaudeSpawnOptions,
@@ -59,12 +56,6 @@ import {
   readClaudeSettingsEnv,
 } from "./Drivers/ClaudeSkills.ts";
 import type { ProviderWorkspaceSnapshot } from "@t3tools/provider-core/server/driver";
-import { makeUnavailableUsageLimits } from "@t3tools/provider-core/server/usageLimits";
-import {
-  type ClaudeScopedLimitNames,
-  claudeUsageResponseToLimits,
-  recordClaudeUsageResponse,
-} from "./claudeUsageLimits.ts";
 import {
   BUNDLED_CLAUDE_MODEL_CATALOG,
   CLAUDE_EFFORT_LEVELS,
@@ -320,9 +311,6 @@ export type ClaudeCapabilitiesProbe = {
   readonly apiProvider: string | undefined;
   readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;
   readonly models?: ReadonlyArray<ClaudeModelInfo>;
-  /** Undefined means get_usage failed; absent windows on success mean no subscription windows, as with API keys. */
-  readonly usage?: Pick<SDKControlGetUsageResponse, "rate_limits_available" | "rate_limits">;
-  readonly usageCheckedAt?: string;
   /** Each settings source's `maxEffortLevel` caps; Claude Code clamps every higher effort. */
   readonly effortCapSources?: ReadonlyArray<ClaudeEffortCapSource>;
 };
@@ -478,7 +466,7 @@ function claudeGatewayDiscoveryGraceMs(environment: Readonly<Record<string, unkn
 
 class ClaudeCapabilitiesProbeSdkError extends Schema.TaggedError<ClaudeCapabilitiesProbeSdkError>()(
   "ClaudeCapabilitiesProbeSdkError",
-  { operation: Schema.Literals(["initialize", "usage", "settings"]), cause: Schema.Defect() },
+  { operation: Schema.Literals(["initialize", "settings"]), cause: Schema.Defect() },
 ) {
   override get message(): string {
     return `Claude capability probe ${this.operation} failed.`;
@@ -544,41 +532,15 @@ const probeClaudeCapabilities = (
     ),
     Effect.flatMap(({ q, init, graceMs }) =>
       Effect.gen(function* () {
-        // Usage has its own deadline so a slow optional request cannot discard initialization.
-        // Only the rate limits are read, so skip the local transcript scan that fills
-        // `behaviors`: with a few GB of transcripts it outlasts the deadline.
-        // The effort caps are read in parallel under the same deadline; workspace probes skip both.
-        const usageCheckedAt = DateTime.formatIso(yield* DateTime.now);
+        // The effort caps are read in parallel under the same deadline; workspace probes skip it.
         const { getSettings } = q as ClaudeSettingsQuery;
-        const [usageResult, settingsResult] = yield* Effect.all(
-          [
-            includeStatus
-              ? Effect.tryPromise({
-                  try: () =>
-                    q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({
-                      skipBehaviors: true,
-                    }),
-                  catch: (cause) =>
-                    new ClaudeCapabilitiesProbeSdkError({ operation: "usage", cause }),
-                }).pipe(Effect.timeout(DEFAULT_TIMEOUT_MS), Effect.result)
-              : Effect.undefined,
-            includeStatus && getSettings
-              ? Effect.tryPromise({
-                  try: () => getSettings.call(q),
-                  catch: (cause) =>
-                    new ClaudeCapabilitiesProbeSdkError({ operation: "settings", cause }),
-                }).pipe(Effect.timeout(DEFAULT_TIMEOUT_MS), Effect.result)
-              : Effect.undefined,
-          ],
-          { concurrency: "unbounded" },
-        );
-        const usage =
-          usageResult && Result.isSuccess(usageResult)
-            ? {
-                rate_limits_available: usageResult.success.rate_limits_available,
-                rate_limits: usageResult.success.rate_limits,
-              }
-            : undefined;
+        const settingsResult = yield* includeStatus && getSettings
+          ? Effect.tryPromise({
+              try: () => getSettings.call(q),
+              catch: (cause) =>
+                new ClaudeCapabilitiesProbeSdkError({ operation: "settings", cause }),
+            }).pipe(Effect.timeout(DEFAULT_TIMEOUT_MS), Effect.result)
+          : Effect.undefined;
         const effortCapSources = parseClaudeEffortCapSources(
           settingsResult && Result.isSuccess(settingsResult) ? settingsResult.success : undefined,
         );
@@ -599,7 +561,6 @@ const probeClaudeCapabilities = (
           apiProvider: account?.apiProvider,
           slashCommands: parseClaudeInitializationCommands(init.commands),
           ...(init.models?.length ? { models: init.models } : {}),
-          ...(usage ? { usage, usageCheckedAt } : {}),
           ...(effortCapSources ? { effortCapSources } : {}),
         } satisfies ClaudeCapabilitiesProbe;
       }).pipe(
@@ -672,9 +633,6 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   environment?: NodeJS.ProcessEnv,
   cwd?: string,
   modelCatalog: ClaudeModelCatalog = BUNDLED_CLAUDE_MODEL_CATALOG,
-  /** Shared with the adapter so turn events reuse the scoped-bucket names this probe saw. */
-  scopedLimitNames?: Ref.Ref<ClaudeScopedLimitNames>,
-  resolveResetCredits?: (version: string) => Effect.Effect<ServerProviderResetCredits | undefined>,
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
@@ -867,25 +825,6 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       authMethod: capabilities.tokenSource,
       apiKeySource: capabilities.apiKeySource,
     });
-  const usageCheckedAt = capabilities.usageCheckedAt ?? checkedAt;
-  const usageLimits = !capabilities.usage
-    ? makeUnavailableUsageLimits({ checkedAt, reason: "probeFailed" })
-    : scopedLimitNames
-      ? yield* recordClaudeUsageResponse(scopedLimitNames, {
-          response: capabilities.usage,
-          checkedAt: usageCheckedAt,
-        })
-      : claudeUsageResponseToLimits({
-          response: capabilities.usage,
-          checkedAt: usageCheckedAt,
-        }).limits;
-  const resetCredits =
-    resolveResetCredits &&
-    capabilities.subscriptionType &&
-    !usageLimits.unavailable &&
-    parsedVersion
-      ? yield* resolveResetCredits(parsedVersion)
-      : undefined;
   return buildServerProvider({
     presentation: CLAUDE_PRESENTATION,
     enabled: claudeSettings.enabled,
@@ -905,7 +844,6 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         ...(authMetadata ? authMetadata : {}),
       },
       ...(versionUpgradeMessage ? { message: versionUpgradeMessage } : {}),
-      usageLimits: resetCredits ? { ...usageLimits, resetCredits } : usageLimits,
     },
   });
 });

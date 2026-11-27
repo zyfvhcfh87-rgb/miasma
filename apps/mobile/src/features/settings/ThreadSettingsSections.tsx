@@ -28,11 +28,7 @@ import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { planAutoSettleSettingsSync, type AutoSettleSettings } from "./autoSettleSettingsSync";
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
-import {
-  managedSettingReason,
-  resolveMobileSettingsTargets,
-  uniformMobileSetting,
-} from "./settings-scoped-server";
+import { managedSettingReason, resolveMobileSettingsTargets } from "./settings-scoped-server";
 
 export function SettingsLabsRouteScreen() {
   const gt = useGT();
@@ -74,7 +70,7 @@ export function SettingsLabsRouteScreen() {
 const AUTO_SETTLE_DEFAULT_DAYS = DEFAULT_SERVER_SETTINGS.sidebarAutoSettleAfterDays ?? 7;
 
 /**
- * Usage-limit and auto-settle rows. The Threads page owns their writes, so they share its queue
+ * Auto-settle rows. The Threads page owns their writes, so they share its queue
  * with the page's other project overrides, and their project override reset.
  */
 export function AutoSettleSettingsRows(props: {
@@ -107,12 +103,7 @@ export function AutoSettleSettingsRows(props: {
     return null;
   }
 
-  const writeToAll = (
-    patch: Partial<AutoSettleSettings> & {
-      autoResumeLimitedThreads?: boolean;
-      snoozeLimitedThreads?: boolean;
-    },
-  ) => props.write(patch);
+  const writeToAll = (patch: Partial<AutoSettleSettings>) => props.write(patch);
 
   const { patch: autoSettlePatch, mismatches } = planAutoSettleSettingsSync(
     {
@@ -135,30 +126,6 @@ export function AutoSettleSettingsRows(props: {
 
   return (
     <View className="gap-6">
-      {!projectSelected ? (
-        <SettingsSection title={gt("Usage limits")}>
-          <SettingsSwitchRow
-            icon="clock"
-            label={gt("Resume after usage limits")}
-            subtitle={gt(
-              "Automatically resume threads when their usage limits reset. You can cancel auto-resume in each thread.",
-            )}
-            value={uniformMobileSetting(displayTargets, "autoResumeLimitedThreads")}
-            disabled={disabledFor("autoResumeLimitedThreads")}
-            onValueChange={(value) => writeToAll({ autoResumeLimitedThreads: value })}
-          />
-          <SettingsSwitchRow
-            icon="clock"
-            label={gt("Snooze until limits reset")}
-            subtitle={gt(
-              "Snooze threads until their usage limits reset. Enable auto-resume to continue the agent after the reset.",
-            )}
-            value={uniformMobileSetting(displayTargets, "snoozeLimitedThreads")}
-            disabled={disabledFor("snoozeLimitedThreads")}
-            onValueChange={(value) => writeToAll({ snoozeLimitedThreads: value })}
-          />
-        </SettingsSection>
-      ) : null}
       <SettingsSection title={gt("Auto-settle")}>
         <SettingsSwitchRow
           icon="arrow.triangle.branch"

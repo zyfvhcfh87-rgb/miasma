@@ -30,8 +30,7 @@ import * as Repositories from "../../../sourceControl/SourceControlRepositorySer
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
-import * as DateTime from "effect/DateTime";
-import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
+
 import {
   resolveProjectFileBackedSetting,
   resolveProjectSettings,
@@ -421,18 +420,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           validatedModelSelection ??
           launchedModel ??
           caller?.modelSelection ??
-          (projectDefaults
-            ? resolveNewThreadModelSelection({
-                defaultSelection: projectDefaults.defaultModelSelection,
-                fallbackSelection: projectDefaults.fallbackModelSelection,
-                providers: yield* ProviderRegistry.ProviderRegistry.pipe(
-                  Effect.flatMap((registry) => registry.getProviders),
-                ),
-                settings: projectDefaults,
-                projectId,
-                now: DateTime.toEpochMillis(yield* DateTime.now),
-              }).selection
-            : null) ??
+          (projectDefaults ? projectDefaults.defaultModelSelection : null) ??
           undefined;
         if (modelSelection === undefined)
           return yield* new OrchestratorMcpFailure({

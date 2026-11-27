@@ -60,7 +60,6 @@ import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as AntigravityInstallation from "./AntigravityInstallation.ts";
 import * as ModelManifest from "./ModelManifest.ts";
 import { applyProviderCompatibility } from "./providerCompatibility.ts";
-import * as ResetCreditCoordinator from "./resetCreditCoordinator.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as OpenCodeRuntime from "@t3tools/provider-opencode/server/OpenCodeRuntime";
@@ -203,7 +202,6 @@ const makeWorkspaceRescanHarness = Effect.gen(function* () {
         getSnapshot: Effect.succeed(provider),
         refresh: Effect.succeed(provider),
         streamChanges: Stream.empty,
-        applyUsageLimits: () => Effect.void,
       },
       // A pull-based stream pulls the next report only after the registry queued the last.
       workspaceRescans: Stream.fromQueue(rescans).pipe(
@@ -533,7 +531,6 @@ const buildRegistryOverSnapshot = Effect.fn("buildRegistryOverSnapshot")(functio
       getSnapshot: Ref.get(snapshot),
       refresh: Ref.get(snapshot),
       streamChanges: Stream.empty,
-      applyUsageLimits: () => Effect.void,
     },
     orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
     textGeneration: {} as ProviderInstance["textGeneration"],
@@ -664,28 +661,6 @@ it.layer(
       }),
     );
 
-    it.effect("labels the plan the usage read reports over the cached login plan", () =>
-      Effect.gen(function* () {
-        const statusWithUsagePlan = (planType: string | null) =>
-          checkCodexProviderStatus(defaultCodexSettings, () =>
-            Effect.succeed(
-              makeCodexProbeSnapshot({
-                rateLimits: { snapshot: { planType }, resetCredits: null },
-              }),
-            ),
-          );
-
-        const downgraded = yield* statusWithUsagePlan("free");
-        assert.strictEqual(downgraded.auth.label, "ChatGPT Free Subscription");
-
-        const unreported = yield* statusWithUsagePlan(null);
-        assert.strictEqual(unreported.auth.label, "ChatGPT Pro 200 Subscription");
-
-        const unknown = yield* statusWithUsagePlan("unknown");
-        assert.strictEqual(unknown.auth.label, "ChatGPT Pro 200 Subscription");
-      }),
-    );
-
     it.effect("returns unauthenticated when app-server requires OpenAI auth", () =>
       Effect.gen(function* () {
         const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
@@ -705,10 +680,6 @@ it.layer(
           status.message,
           "Codex CLI is not authenticated. Run `codex login` and try again.",
         );
-        assert.deepStrictEqual(status.usageLimits?.unavailable, {
-          reason: "probeFailed",
-          message: "Codex CLI is not authenticated. Run `codex login` and try again.",
-        });
       }),
     );
 
@@ -931,86 +902,6 @@ it.layer(
         assert.strictEqual(status.installed, true);
         assert.match(status.message ?? "", /^Codex app-server provider probe failed: /);
         assert.isTrue(yield* Deferred.isDone(released));
-      }),
-    );
-
-    it.effect("shows Codex usage that answers after three seconds inside the probe budget", () =>
-      Effect.gen(function* () {
-        const usageRequested = yield* Deferred.make<void>();
-        const spawner = ChildProcessSpawner.make(() =>
-          Effect.gen(function* () {
-            const scope = yield* Effect.scope;
-            const output = yield* Queue.unbounded<Uint8Array>();
-            const send = (message: unknown) =>
-              Queue.offer(output, encoder.encode(`${JSON.stringify(message)}\n`));
-            const results: Record<string, unknown> = {
-              initialize: {
-                userAgent: "codex_cli_rs/0.167.0",
-                codexHome: "/nonexistent-codex-home",
-                platformFamily: "unix",
-                platformOs: "linux",
-              },
-              "account/read": {
-                account: { type: "chatgpt", email: "test@example.com", planType: "pro" },
-                requiresOpenaiAuth: true,
-              },
-              "config/read": { config: {}, origins: {} },
-              "skills/list": { data: [] },
-              "model/list": { data: [] },
-            };
-            const answer = (line: string) => {
-              const { id, method } = JSON.parse(line) as { id?: number; method?: string };
-              if (id === undefined || method === undefined) return Effect.void;
-              if (method !== "account/rateLimits/read") {
-                return send({ id, result: results[method] ?? {} });
-              }
-              return Deferred.succeed(usageRequested, undefined).pipe(
-                Effect.andThen(Effect.sleep("4 seconds")),
-                Effect.andThen(
-                  send({
-                    id,
-                    result: {
-                      rateLimits: {
-                        limitId: "codex",
-                        planType: "pro",
-                        primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: 2e9 },
-                      },
-                      rateLimitsByLimitId: null,
-                      rateLimitResetCredits: null,
-                      accountId: null,
-                    },
-                  }),
-                ),
-                Effect.forkIn(scope),
-              );
-            };
-            const decoder = new TextDecoder();
-            let buffered = "";
-            return ChildProcessSpawner.makeHandle({
-              ...mockHandle({ stdout: "", stderr: "", code: 0 }),
-              exitCode: Effect.never,
-              isRunning: Effect.succeed(true),
-              stdin: Sink.forEach((chunk: Uint8Array) => {
-                buffered += decoder.decode(chunk, { stream: true });
-                const lines = buffered.split("\n");
-                buffered = lines.pop() ?? "";
-                return Effect.forEach(lines.filter(Boolean), answer, { discard: true });
-              }),
-              stdout: Stream.fromQueue(output),
-            });
-          }),
-        );
-        const fiber = yield* checkCodexProviderStatus(defaultCodexSettings).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.forkChild,
-        );
-        yield* Deferred.await(usageRequested);
-        yield* TestClock.adjust("25 seconds");
-        const status = yield* Fiber.join(fiber);
-
-        assert.strictEqual(status.auth.status, "authenticated");
-        assert.isUndefined(status.usageLimits?.unavailable);
-        assert.strictEqual(status.usageLimits?.windows[0]?.usedPercent, 42);
       }),
     );
 
@@ -1743,7 +1634,6 @@ it.layer(
                   Effect.tap((provider) => Ref.set(currentProvider, provider)),
                 ),
                 streamChanges: Stream.empty,
-                applyUsageLimits: () => Effect.void,
               },
               orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
               textGeneration: {} as ProviderInstance["textGeneration"],
@@ -1893,7 +1783,6 @@ it.layer(
                     return checked;
                   }),
                   streamChanges: Stream.empty,
-                  applyUsageLimits: () => Effect.void,
                 },
                 orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
                 textGeneration: {} as ProviderInstance["textGeneration"],
@@ -2055,7 +1944,6 @@ it.layer(
                 Effect.tap((provider) => Ref.set(currentProvider, provider)),
               ),
               streamChanges: Stream.empty,
-              applyUsageLimits: () => Effect.void,
             },
             orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
             textGeneration: {} as ProviderInstance["textGeneration"],
@@ -2161,7 +2049,6 @@ it.layer(
               isAwaitingFirstCheck: Effect.succeed(false),
               refresh: Effect.succeed(failedProvider),
               streamChanges: Stream.empty,
-              applyUsageLimits: () => Effect.void,
             },
             orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
             textGeneration: {} as ProviderInstance["textGeneration"],
@@ -2503,7 +2390,6 @@ it.layer(
                 getSnapshot: Effect.succeed(provider),
                 refresh: Ref.update(probes, (count) => count + 1).pipe(Effect.as(provider)),
                 streamChanges: Stream.empty,
-                applyUsageLimits: () => Effect.void,
               },
               invalidateCaches: Ref.update(invalidations, (count) => count + 1).pipe(
                 Effect.andThen(
@@ -2693,7 +2579,6 @@ it.layer(
               getSnapshot: Effect.succeed(provider),
               refresh: Effect.succeed(provider),
               streamChanges: Stream.empty,
-              applyUsageLimits: () => Effect.void,
             },
             snapshotForCwd: () =>
               Ref.update(scans, (count) => count + 1).pipe(
@@ -2812,7 +2697,6 @@ it.layer(
                 getSnapshot: Effect.succeed(provider),
                 refresh: Effect.succeed(provider),
                 streamChanges: Stream.empty,
-                applyUsageLimits: () => Effect.void,
               },
               orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
               textGeneration: {} as ProviderInstance["textGeneration"],
@@ -2899,7 +2783,6 @@ it.layer(
             })),
             refresh: Effect.die("unused"),
             streamChanges: Stream.empty,
-            applyUsageLimits: () => Effect.void,
           },
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
           textGeneration: {} as ProviderInstance["textGeneration"],
@@ -3134,7 +3017,6 @@ it.layer(
             getSnapshot: Effect.succeed(provider),
             refresh: Effect.succeed(provider),
             streamChanges: Stream.empty,
-            applyUsageLimits: () => Effect.void,
           },
           snapshotForCwd: (directory) =>
             Ref.update(scannedDirectories, (directories) => [...directories, directory]).pipe(
@@ -3237,7 +3119,6 @@ it.layer(
             getSnapshot: Effect.succeed(unhealthyProvider),
             refresh: Effect.succeed(unhealthyProvider),
             streamChanges: Stream.empty,
-            applyUsageLimits: () => Effect.void,
           },
           snapshotForCwd: () => Ref.get(scanResult),
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
@@ -3365,7 +3246,6 @@ it.layer(
             getSnapshot: Ref.get(machineProvider),
             refresh: Ref.get(machineProvider),
             streamChanges: Stream.empty,
-            applyUsageLimits: () => Effect.void,
           },
           snapshotForCwd: () => Ref.get(scanResult),
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
@@ -3475,7 +3355,6 @@ it.layer(
                 return provider;
               }),
               streamChanges: Stream.empty,
-              applyUsageLimits: () => Effect.void,
             },
             orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
             textGeneration: {} as ProviderInstance["textGeneration"],
@@ -3575,7 +3454,6 @@ it.layer(
                 getSnapshot: Effect.succeed(snapshot),
                 refresh: Effect.as(refresh, snapshot),
                 streamChanges: Stream.empty,
-                applyUsageLimits: () => Effect.void,
               },
               orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
               textGeneration: {} as ProviderInstance["textGeneration"],
@@ -3718,7 +3596,6 @@ it.layer(
               return pendingProvider;
             }),
             streamChanges: Stream.fromPubSub(changes),
-            applyUsageLimits: () => Effect.void,
           },
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
           textGeneration: {} as ProviderInstance["textGeneration"],
@@ -3842,7 +3719,6 @@ it.layer(
             getSnapshot: Effect.succeed(initialProvider),
             refresh: Effect.succeed(refreshedProvider),
             streamChanges: Stream.fromPubSub(changes),
-            applyUsageLimits: () => Effect.void,
           },
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
           textGeneration: {} as ProviderInstance["textGeneration"],
@@ -3944,7 +3820,6 @@ it.layer(
             getSnapshot: Effect.succeed(initialProvider),
             refresh: Effect.succeed(initialProvider),
             streamChanges: Stream.fromPubSub(changes),
-            applyUsageLimits: () => Effect.void,
           },
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
           textGeneration: {} as ProviderInstance["textGeneration"],
@@ -4133,7 +4008,6 @@ it.layer(
               getSnapshot: Effect.succeed(initialProvider),
               refresh: Effect.succeed(authoritativeProvider),
               streamChanges: Stream.fromPubSub(changes),
-              applyUsageLimits: () => Effect.void,
             },
             orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
             textGeneration: {} as ProviderInstance["textGeneration"],
@@ -4237,7 +4111,6 @@ it.layer(
             getSnapshot: Effect.succeed(cachedProvider),
             refresh: Effect.die(new Error("simulated refresh failure")),
             streamChanges: Stream.empty,
-            applyUsageLimits: () => Effect.void,
           },
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
           textGeneration: {} as ProviderInstance["textGeneration"],
@@ -4412,7 +4285,6 @@ it.layer(
           Layer.provideMerge(ProviderLatestVersions.layer),
           Layer.provideMerge(McpProviderSessions.layer),
           Layer.provideMerge(ModelManifest.layerTest),
-          Layer.provideMerge(ResetCreditCoordinator.layerTest),
           Layer.provideMerge(
             OpenCodeRuntime.layer.pipe(Layer.provide(OpenCodeServerLedger.layerTest)),
           ),
@@ -4538,7 +4410,6 @@ it.layer(
           Layer.provideMerge(ProviderLatestVersions.layer),
           Layer.provideMerge(McpProviderSessions.layer),
           Layer.provideMerge(ModelManifest.layerTest),
-          Layer.provideMerge(ResetCreditCoordinator.layerTest),
           Layer.provideMerge(
             OpenCodeRuntime.layer.pipe(Layer.provide(OpenCodeServerLedger.layerTest)),
           ),
@@ -4645,7 +4516,6 @@ it.layer(
           ),
           Layer.provideMerge(ProviderLatestVersions.layer),
           Layer.provideMerge(McpProviderSessions.layer),
-          Layer.provideMerge(ResetCreditCoordinator.layerTest),
           Layer.provideMerge(layerBackgroundPolicyAlwaysRun),
         ),
       );

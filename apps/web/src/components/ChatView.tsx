@@ -5,7 +5,6 @@ import { ChildThreadApprovals } from "./chat/ChildThreadApprovals";
 import { draftSupportedRuntimeModes } from "./chat/runtimeModeConfig";
 import { workspaceAreaProps } from "../lib/workspaceFocus";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
-import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
 import { queuedRunEditBlockedReason } from "@t3tools/client-runtime/queued-run-edit";
 import { ScrollToEndButton, WorkspaceFileDropOverlay } from "./chat/TimelineOverlays";
 import { usePasteToFocusComposer } from "./chat/usePasteToFocusComposer";
@@ -41,7 +40,6 @@ import { useComposerResume } from "./chat/useComposerResume";
 import { ThreadFind, ThreadFindCanvas } from "./chat/ThreadFindProvider";
 import { closeThreadFind, openThreadFind, useThreadFindOpen } from "./chat/threadFindStore";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
-import { useUsageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
 import {
   isThreadEnvironmentLocked,
   resolveDraftHeroState,
@@ -57,14 +55,12 @@ import { usePendingThreadRequests } from "./chat/usePendingThreadRequests";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { resolveWorktreeRepositorySelection } from "@t3tools/client-runtime/state/thread-repositories";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
-import type { UsageLimitSourceSnapshots } from "@t3tools/contracts";
 import { feedbackBannerItem } from "./chat/ComposerFeedback";
 import { freshSessionBannerItem } from "./chat/ComposerFreshSession";
 import { heldComposerSendBannerItem } from "./chat/ComposerHeldSendBanner";
 import { armFreshSession, disarmFreshSession, useFreshSessionArmed } from "./chat/freshSessionArms";
 import { cancelHeldComposerSend, useComposerSendHeld } from "./chat/preparingComposerImages";
 import { ComposerUsageMeter } from "./chat/ComposerUsageMeter";
-import { useUsageLimitsPanel } from "./chat/useUsageLimitsPanel";
 import { useWorktreeSetup } from "./chat/useWorktreeSetup";
 import { useChatShortcuts } from "./chat/useChatShortcuts";
 import { ChatBannerLane } from "./chat/ChatBannerLane";
@@ -101,7 +97,6 @@ import {
   deriveLatestThreadRun,
   presentProviderStarting,
   deriveThreadStructureRuntime,
-  limitRecoveryOwnsSnooze,
 } from "@t3tools/client-runtime/state/thread-execution";
 import {
   resolveWorkflowOpening,
@@ -356,7 +351,6 @@ import { useProactivePanels } from "../hooks/useProactivePanels";
 import { useIncrementalTimelineEntries } from "../hooks/useIncrementalTimelineEntries";
 import { useRightPanelSurfaceClose } from "../hooks/useRightPanelSurfaceClose";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
-import { modelFallbackBannerItem } from "./chat/ComposerUsageLimits";
 import { ComposerSurface } from "./chat/ComposerSurface";
 import { resolveThreadSyncPhase } from "../threadSync";
 import { hasAvailableCompactionProvider } from "./chat/compaction.logic";
@@ -427,7 +421,6 @@ const ACTIVE_RUN_STATUSES: ReadonlySet<string> = new Set([
   "waiting",
 ]);
 const EMPTY_PROVIDER_MODELS: ServerProvider["models"] = [];
-const EMPTY_USAGE_LIMIT_SOURCES: UsageLimitSourceSnapshots = [];
 import type { CodexArtifactTemplate } from "@t3tools/shared/codexArtifactTemplates";
 
 const EMPTY_FEEDBACK_SUBMISSIONS: ReadonlyArray<CodexFeedbackSubmission> = [];
@@ -461,8 +454,6 @@ type ChatViewProps =
       routeKind: "draft";
       draftId: DraftId;
     };
-
-const DismissedFallbackWindowSchema = Schema.NullOr(Schema.String);
 
 const ignoreComposerFocus = () => {};
 
@@ -842,29 +833,20 @@ export default function ChatView(props: ChatViewProps) {
         fallbackDraftProject ?? undefined,
       ).settings.defaultModelSelection
     : null;
-  const draftModelResolution = draftThread
-    ? resolveNewThreadModelSelection({
-        defaultSelection:
-          draftDefaultModelSelection ??
-          resolveProjectDefaultProviderModelSelection(
-            providersByEnvironment.get(draftThread.environmentId) ?? [],
-            settings,
-            draftThread.projectId,
-          ),
-        fallbackSelection: settings.fallbackModelSelection,
-        providers: providersByEnvironment.get(draftThread.environmentId) ?? [],
-        settings,
-        projectId: draftThread.projectId,
-        now: Date.parse(`${nowMinute}:00Z`),
-      })
-    : null;
-  const draftFallback = draftModelResolution?.fallback ? draftModelResolution : null;
+  const draftModelSelection =
+    draftDefaultModelSelection ??
+    (draftThread
+      ? resolveProjectDefaultProviderModelSelection(
+          providersByEnvironment.get(draftThread.environmentId) ?? [],
+          settings,
+          draftThread.projectId,
+        )
+      : null);
   const localDraftThread = draftThread
     ? buildLocalDraftThread(
         threadId,
         draftThread,
-        (draftFallback ? draftFallback.selection : draftDefaultModelSelection) ??
-          NO_PROVIDER_MODEL_SELECTION,
+        draftModelSelection ?? NO_PROVIDER_MODEL_SELECTION,
         messages,
       )
     : undefined;
@@ -899,9 +881,7 @@ export default function ChatView(props: ChatViewProps) {
     serverProjection?.runs.some((run) => run.status === "queued" && run.queueHeld === true) ===
       true;
   const resumableRunId =
-    !isServerThread || serverProjection === null
-      ? null
-      : deriveResumableRunId(serverProjection, serverRuntime);
+    !isServerThread || serverProjection === null ? null : deriveResumableRunId(serverProjection);
   const canResume =
     serverProjection !== null &&
     canResumeThread(serverProjection, resumableRunId, hasHeldQueuedRuns);
@@ -1106,26 +1086,7 @@ export default function ChatView(props: ChatViewProps) {
   );
   const browserAvailable = isPreviewSupportedInRuntime() || activeEnvironmentServerBrowser;
   const activeThreadShell = serverThread;
-  const limitRecoveryRun =
-    serverRuntime?.status === "failed" && serverRuntime.lastErrorClass === "usage_limit"
-      ? (activeThreadShell?.latestRun ?? null)
-      : null;
-  // The recovery banner offers Wake now for a snooze it set.
-  const limitRecoveryHoldsSnooze = limitRecoveryOwnsSnooze({
-    runId: limitRecoveryRun?.runId,
-    resetAt: serverRuntime?.usageLimitResetAt,
-    recovery: activeThreadShell?.limitRecovery,
-    snoozedUntil: activeThreadShell?.snoozedUntil,
-  });
-  // The run whose limit rows client-runtime hides (deriveUsageLimitNoticeRows).
-  const usageLimitRunId =
-    serverRuntime?.status === "failed" && serverRuntime.lastErrorClass === "usage_limit"
-      ? (serverLatestRun?.runId ?? null)
-      : null;
-  const timelineThreadError =
-    limitRecoveryRun !== null && visibleThreadError === serverRuntime?.lastError
-      ? null
-      : visibleThreadError;
+  const timelineThreadError = visibleThreadError;
 
   const [timelineAnchor, setTimelineAnchor] = useState<{
     readonly threadKey: string | null;
@@ -1228,8 +1189,8 @@ export default function ChatView(props: ChatViewProps) {
   const { projectCloneBannerItem, projectCloneSendBlockReason } =
     useProjectCloneBanner(activeProjectRef);
   const activeProjectDefaultModelSelection =
-    !isServerThread && draftFallback
-      ? draftFallback.selection
+    !isServerThread && draftModelSelection !== null
+      ? draftModelSelection
       : activeProjectSettings.settings.defaultModelSelection;
   const handleNewThreadInActiveProject = () => {
     startNewThreadForProject(activeProjectRef, handleNewThread);
@@ -1504,31 +1465,6 @@ export default function ChatView(props: ChatViewProps) {
   );
   const onHeldRequestIdsChange = useStableCallback((requestIds: ReadonlySet<string>) => {
     setHeldApprovalRequestIds((current) => (shallow(current, requestIds) ? current : requestIds));
-  });
-  // Answering an approval or question on any client resumes quota spending, so include it in the key.
-  const usageLimitsKey =
-    activeProviderInstanceId === null || (isServerThread && activeThread === undefined)
-      ? null
-      : [
-          routeThreadKey,
-          activeProviderInstanceId,
-          activeThread?.latestRun?.runId ?? "",
-          activePendingApproval?.requestId ?? activePendingUserInput?.requestId ?? "",
-        ].join(":");
-  const {
-    banner: usageLimitsBanner,
-    offered: usageLimitsOffered,
-    open: openUsageLimits,
-    clearFor: clearUsageLimitsFor,
-  } = useUsageLimitsPanel({
-    environmentId,
-    threadKey: routeThreadKey,
-    panelKey: usageLimitsKey,
-    providerInstanceId: activeProviderInstanceId,
-    model: activeUsageModel,
-    providerDriver: activeProviderStatus?.driver ?? null,
-    providers: providerStatuses,
-    sources: serverConfig?.usageLimitSources ?? EMPTY_USAGE_LIMIT_SOURCES,
   });
   const {
     beginLocalDispatch,
@@ -1852,11 +1788,6 @@ export default function ChatView(props: ChatViewProps) {
     resumeCompactionPermanentlyDismissed,
     setResumeCompactionPermanentlyDismissed,
   ]);
-  const [dismissedFallbackWindow, setDismissedFallbackWindow] = useLocalStorage(
-    `t3code:fallback-notice-dismissed:${environmentId}`,
-    null,
-    DismissedFallbackWindowSchema,
-  );
   const providerStatusDismissalKey = getProviderStatusDismissalKey(
     providerEnvironmentId,
     activeProviderStatus,
@@ -2612,7 +2543,6 @@ export default function ChatView(props: ChatViewProps) {
     activeThreadKey,
     activeThreadShell,
     activeLatestRun,
-    limitRecoveryHoldsSnooze,
     activeProjectCwd,
     serverConfig,
     runtimeMode,
@@ -2631,7 +2561,6 @@ export default function ChatView(props: ChatViewProps) {
     sendInFlightRef,
     setOptimisticUserMessages,
     setThreadError,
-    clearUsageLimitsFor,
     beginLocalDispatch,
     resetLocalDispatch,
     scrollToEnd,
@@ -2752,84 +2681,11 @@ export default function ChatView(props: ChatViewProps) {
     );
     return item ? [item] : [];
   });
-  const limitRecoveryBanner = useUsageLimitRecoveryBannerItem(
-    limitRecoveryRun !== null && activeThreadShell !== null
-      ? {
-          runId: limitRecoveryRun.runId,
-          errorCode: serverRuntime?.lastErrorCode ?? null,
-          resetAt: serverRuntime?.usageLimitResetAt ?? null,
-          stoppedAt: limitRecoveryRun.completedAt ?? activeThreadShell.updatedAt,
-          settled: activeThreadShell.settledOverride === "settled",
-          requestPending: pendingApprovals.length > 0 || pendingUserInputs.length > 0,
-          recovery: activeThreadShell.limitRecovery ?? null,
-          snoozedUntil: activeThreadShell.snoozedUntil,
-          timestampFormat,
-          onChange: async (limitRecovery) => {
-            const result = await updateThreadMetadata({
-              environmentId,
-              input: { threadId: activeThreadShell.id, limitRecovery },
-            });
-            if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-          },
-        }
-      : null,
-    messages,
-  );
   const composerBannerItems = (() => {
-    const fallbackSelection = draftFallback?.selection;
-    const defaultSelection =
-      draftDefaultModelSelection ??
-      resolveProjectDefaultProviderModelSelection(
-        providerStatuses,
-        settings,
-        draftThread?.projectId ?? null,
-      );
-    const fallback =
-      !isServerThread &&
-      multipleModelSelections === null &&
-      !composerModelSelectionExplicit &&
-      draftFallback?.fallback &&
-      (!composerSelectedModelSelection ||
-        (composerSelectedModelSelection.instanceId === fallbackSelection?.instanceId &&
-          composerSelectedModelSelection.model === fallbackSelection?.model))
-        ? draftFallback.fallback
-        : null;
-    const fallbackWindow = fallback
-      ? `${fallback.provider.instanceId}:${fallback.resetsAt ?? ""}`
-      : null;
-    const fallbackItems: ComposerBannerStackItem[] =
-      fallback &&
-      fallbackSelection &&
-      defaultSelection &&
-      fallbackWindow !== dismissedFallbackWindow
-        ? [
-            modelFallbackBannerItem(
-              {
-                fallbackModelName:
-                  providerStatuses
-                    .find((provider) => provider.instanceId === fallbackSelection.instanceId)
-                    ?.models.find((model) => model.slug === fallbackSelection.model)?.name ??
-                  fallbackSelection.model,
-                defaultProviderName: fallback.provider.displayName ?? fallback.provider.driver,
-                defaultModelName:
-                  fallback.provider.models.find((model) => model.slug === defaultSelection.model)
-                    ?.name ?? defaultSelection.model,
-                resetsAt: fallback.resetsAt,
-                timestampFormat,
-                onUseDefault: () =>
-                  onProviderModelSelectStable(defaultSelection.instanceId, defaultSelection.model),
-                onDismiss: () => setDismissedFallbackWindow(fallbackWindow),
-              },
-              messages,
-            ),
-          ]
-        : [];
-    const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
     const extensionStatusBanner = extensionStatusBannerItem(
       deriveProviderExtensionStatuses(serverProjection),
     );
     const extensionStatusItems = extensionStatusBanner === null ? [] : [extensionStatusBanner];
-    const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
     const projectCloneItems = projectCloneBannerItem === null ? [] : [projectCloneBannerItem];
     // An approval's feedback goes to that approval; the armed session waits for the next message.
     const freshSessionItems =
@@ -2847,10 +2703,7 @@ export default function ChatView(props: ChatViewProps) {
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
       return [
         ...feedbackBannerItems,
-        ...fallbackItems,
-        ...limitRecoveryItems,
         ...extensionStatusItems,
-        ...usageLimitsItems,
         ...projectCloneItems,
         ...freshSessionItems,
         ...heldSendItems,
@@ -2859,10 +2712,7 @@ export default function ChatView(props: ChatViewProps) {
     }
     return [
       ...feedbackBannerItems,
-      ...fallbackItems,
-      ...limitRecoveryItems,
       ...extensionStatusItems,
-      ...usageLimitsItems,
       ...projectCloneItems,
       ...freshSessionItems,
       ...heldSendItems,
@@ -3127,7 +2977,6 @@ export default function ChatView(props: ChatViewProps) {
     localCheckoutBranchMismatch,
     composerRef,
     persistThreadSettingsForNextTurn,
-    clearUsageLimitsFor,
     scrollToEnd,
     setThreadError,
   });
@@ -3174,10 +3023,6 @@ export default function ChatView(props: ChatViewProps) {
     keepFullHistory,
     freshSessionAvailable: freshSessionCommandAvailable,
     resumeCompactionTokens,
-    usageLimitsKey,
-    usageLimitsOffered,
-    openUsageLimits,
-    clearUsageLimitsFor,
     needsLoadBalancing,
     loadBalancing,
     refreshBeforeSend,
@@ -3637,9 +3482,6 @@ export default function ChatView(props: ChatViewProps) {
               threadErrorClass={
                 threadErrorIsServerRuntimeError ? (serverRuntime?.lastErrorClass ?? null) : null
               }
-              threadErrorCode={
-                threadErrorIsServerRuntimeError ? (serverRuntime?.lastErrorCode ?? null) : null
-              }
               threadErrorBannerKey={threadErrorBannerKey}
               setThreadError={setThreadError}
               setThreadErrorBannerDismissTick={setThreadErrorBannerDismissTick}
@@ -3707,7 +3549,6 @@ export default function ChatView(props: ChatViewProps) {
                   listRef={legendListRef}
                   runs={serverProjection?.runs ?? []}
                   latestRun={activeActivityRun}
-                  usageLimitRunId={usageLimitRunId}
                   announcedRun={announcedRun(activeActivityRun, serverProjection?.runs ?? [])}
                   detailBehindShell={isDetailBehindShell(
                     activeLatestRun,
@@ -3923,13 +3764,6 @@ export default function ChatView(props: ChatViewProps) {
                                 onFreshSession={
                                   freshSessionCommandAvailable ? armFreshSessionStable : undefined
                                 }
-                                onUsageLimitsCommand={
-                                  usageLimitsOffered &&
-                                  usageLimitsKey !== null &&
-                                  !composerHasNonPromptContent
-                                    ? openUsageLimits
-                                    : undefined
-                                }
                                 environmentUnavailable={activeEnvironmentUnavailableState}
                                 activePendingApproval={activePendingApproval}
                                 pendingApprovals={pendingApprovals}
@@ -4075,10 +3909,6 @@ export default function ChatView(props: ChatViewProps) {
                                                 providerInstanceId={activeProviderInstanceId}
                                                 model={activeUsageModel}
                                                 providers={providerStatuses}
-                                                sources={
-                                                  serverConfig?.usageLimitSources ??
-                                                  EMPTY_USAGE_LIMIT_SOURCES
-                                                }
                                               />
                                             ) : null}
                                             {!isServerThread ? (
@@ -4106,9 +3936,6 @@ export default function ChatView(props: ChatViewProps) {
                                   providerInstanceId={activeProviderInstanceId}
                                   model={activeUsageModel}
                                   providers={providerStatuses}
-                                  sources={
-                                    serverConfig?.usageLimitSources ?? EMPTY_USAGE_LIMIT_SOURCES
-                                  }
                                 />
                               </div>
                             ) : null}
@@ -4218,13 +4045,7 @@ export default function ChatView(props: ChatViewProps) {
                   onAddProjectScript={saveProjectScriptStable}
                   onUpdateProjectScript={updateProjectScriptStable}
                   onDeleteProjectScript={deleteProjectScriptStable}
-                  usage={{
-                    providerInstanceId: activeProviderInstanceId,
-                    model: activeUsageModel,
-                    providers: providerStatuses,
-                    sources: serverConfig?.usageLimitSources ?? EMPTY_USAGE_LIMIT_SOURCES,
-                    contextWindow: activeContextWindow,
-                  }}
+                  contextWindow={activeContextWindow}
                 />
 
                 <PullRequestThreadDialogHost

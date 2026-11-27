@@ -392,7 +392,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/appearance",
     searchTerms: [
       msg(
-        "customize show hide panel card environment editor scripts branch pull request git changes servers automations lineage usage limits 5 hour weekly quota tokens context window",
+        "customize show hide panel card environment editor scripts branch pull request git changes servers automations lineage usage tokens context window",
       ),
     ],
   },
@@ -470,9 +470,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "composer-usage-meter",
-    title: msg("Composer usage limits"),
+    title: msg("Composer usage meter"),
     to: "/settings/appearance",
-    searchTerms: [msg("quota meter 5h weekly spend")],
+    searchTerms: [msg("meter spend tokens today")],
   },
   {
     id: "project-grouping",
@@ -493,18 +493,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("snooze presets times later tonight tomorrow next week remind")],
     environmentOnly: true,
     scope: "environment-defaults",
-  },
-  {
-    id: "snooze-limited-threads",
-    title: msg("Snooze until limits reset"),
-    to: "/settings/threads",
-    searchTerms: [msg("usage quota rate limit reset wake recover continue")],
-  },
-  {
-    id: "auto-resume-limited-threads",
-    title: msg("Resume after usage limits"),
-    to: "/settings/threads",
-    searchTerms: [msg("usage quota rate limit reset recover continue")],
   },
   {
     id: "working-shelf",
@@ -1094,11 +1082,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "usage-providers",
     title: msg("Usage providers"),
     to: "/settings/providers",
-    searchTerms: [
-      msg(
-        "usage sources CLIProxyAPI CLI proxy hub quota subscription limits management key add remove",
-      ),
-    ],
+    searchTerms: [msg("usage providers accounts spend cost tokens models")],
     providerSettingsOnly: true,
   },
   {

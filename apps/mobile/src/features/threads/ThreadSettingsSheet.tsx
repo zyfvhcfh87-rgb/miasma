@@ -79,7 +79,6 @@ import {
   rememberModelOptions,
   withRememberedModelOptions,
 } from "../../state/use-model-option-memory";
-import { ChatGptSharingStatus } from "./ChatGptSharingStatus";
 import { environmentCatalog } from "../../connection/catalog";
 import { useEnvironmentQuery } from "../../state/query";
 import { scopedThreadKey } from "../../lib/scopedEntities";
@@ -966,16 +965,10 @@ function ThreadSettingsOptionsItem(props: {
   const gt = useGT();
   const m = useMessages();
   const session = useThreadSettingsSession();
-  const configs = useAtomValue(environmentServerConfigsAtom);
-  const selectedProvider = session.environmentId
-    ? (configs
-        .get(session.environmentId)
-        ?.providers.find((provider) => provider.instanceId === session.providerInstanceId) ?? null)
-    : null;
+  const _configs = useAtomValue(environmentServerConfigsAtom);
 
   return (
     <View style={{ paddingBottom: insets.bottom + props.bottomInset + 12 }}>
-      <ChatGptSharingStatus provider={selectedProvider} />
       <Text className="px-5 pb-2 pt-2 text-sm font-t3-medium text-foreground-muted">
         <T>Options</T>
       </Text>

@@ -161,10 +161,6 @@ vi.mock(import("./settingsLayout"), async (original) => ({
     </div>
   )) as never,
 }));
-vi.mock(import("./UsageProviderSettings"), async (original) => ({
-  ...(await original()),
-  UsageProviderSettings: (() => null) as never,
-}));
 vi.mock(import("../ProviderUpdatesAction"), async (original) => ({
   ...(await original()),
   ProviderUpdatesAction: (() => null) as never,

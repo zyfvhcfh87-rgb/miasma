@@ -17,8 +17,6 @@ import * as HttpClientError from "effect/http/HttpClientError";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 
-import { readServerUsageLimits } from "./usageLimits.ts";
-
 /** OpenCode 2 accepts only HTTP Basic auth, always with this user name. */
 const OPENCODE_USERNAME = "opencode";
 
@@ -96,9 +94,6 @@ const decodeImageJob = Schema.decodeUnknownOption(NativeImageJob);
 /** events resolves on subscription acceptance; subscribe before work because the stream is volatile. */
 export interface OpenCode2Api {
   readonly client: OpenCodeClient;
-  readonly usageLimits: (
-    directory: string,
-  ) => Effect.Effect<import("@t3tools/contracts").ServerProviderUsageLimits | undefined>;
   readonly shellJobs?: (
     sessionID: string,
   ) => Effect.Effect<typeof ShellJobs.Type, HttpClientError.HttpClientError | Schema.SchemaError>;
@@ -274,13 +269,6 @@ export const make = Effect.gen(function* () {
         Effect.provideService(HttpClient.HttpClient, fillCompactionRecents(authenticated)),
         Effect.map((client) => ({
           client,
-          usageLimits: (directory) =>
-            readServerUsageLimits(directory).pipe(
-              Effect.provideService(
-                HttpClient.HttpClient,
-                HttpClient.mapRequest(authenticated, HttpClientRequest.prependUrl(baseUrl)),
-              ),
-            ),
           shellJobs: Effect.fn("OpenCode2Client.shellJobs")(function (sessionID: string) {
             return authenticated
               .get(`${baseUrl}/api/experimental/job`, {

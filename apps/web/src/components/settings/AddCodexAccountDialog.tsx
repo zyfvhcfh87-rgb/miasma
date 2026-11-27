@@ -9,7 +9,6 @@ import {
 } from "@t3tools/contracts";
 import { T, useGT } from "gt-react";
 import { useState, type ReactNode } from "react";
-import { usesChatGptSharing } from "@t3tools/shared/usageLimits";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { randomUUID } from "../../lib/utils";
@@ -52,7 +51,7 @@ export function AddCodexAccountDialog({
   const provider = providers?.find((candidate) => candidate.instanceId === instanceId);
   // Closes itself once the new account connects; the owner unmounts it after
   // the close animation.
-  const connected = usesChatGptSharing(provider);
+  const connected = provider?.auth.status === "authenticated";
 
   const createAccount = async () => {
     if (pending || !name.trim() || !readEnvironmentScope(environmentId, AuthProvidersManageScope))

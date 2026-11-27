@@ -7,7 +7,6 @@ import {
   type ServerSettings,
   SimlockDeviceHostConfig,
   TextGeneratorConfig,
-  UsageLimitSourceConfig,
 } from "@t3tools/contracts";
 import { getProviderClient } from "@t3tools/client-runtime/provider-clients";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
@@ -21,7 +20,6 @@ type SecretUseSettings = Pick<
   ServerSettings,
   | "providerInstances"
   | "sourceControlHosts"
-  | "usageLimitSources"
   | "textGenerators"
   | "easDeviceHosts"
   | "simlockDeviceHosts"
@@ -90,14 +88,6 @@ export function secretProviderUses(
             settings.sourceControlHosts[definition.kind],
           )
         : [],
-    ),
-    ...Object.entries(settings.usageLimitSources).flatMap(([id, source]) =>
-      uses(
-        { settingsSchema: UsageLimitSourceConfig },
-        `usage-limit:${id}`,
-        source.label ?? source.url,
-        source,
-      ),
     ),
     ...Object.entries(settings.textGenerators).flatMap(([id, generator]) =>
       uses(

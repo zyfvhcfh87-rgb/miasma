@@ -11,7 +11,6 @@ import {
   latestRootProviderFailure,
   orchestrationV2WorktreePending,
   runRanAfter,
-  usageLimitBlockedRun,
 } from "@t3tools/shared/orchestrationV2ThreadError";
 import { threadIssueKeysEqual } from "@t3tools/contracts";
 import { canonicalizeGitCafePullRequestUrl } from "@t3tools/source-control-definitions/registry";
@@ -36,7 +35,6 @@ import {
   type ModelSelection,
   OrchestrationV2Command,
   type OrchestrationV2InternalCommand,
-  type OrchestrationV2LimitRecoveryUpdate,
   type OrchestrationV2Notification,
   type OrchestrationV2ServerCommand,
   type ThreadPullRequestLink,
@@ -186,7 +184,6 @@ import {
 import {
   applyToProjection,
   emptyProjection,
-  threadShellFromProjection,
   ProjectionStoreV2,
   type ProjectionRecordField,
   type ProjectionTimelinePage,
@@ -437,11 +434,6 @@ export interface OrchestratorV2Shape {
   readonly dispatch: (
     command: OrchestrationV2ServerCommand,
   ) => Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error>;
-  readonly autoArmLimitRecovery: (input: {
-    readonly commandId: CommandId;
-    readonly threadId: ThreadId;
-    readonly limitRecovery: OrchestrationV2LimitRecoveryUpdate;
-  }) => Effect.Effect<void, OrchestratorV2Error>;
   readonly searchThreadStream: (
     input: OrchestrationV2SearchThreadInput,
   ) => Stream.Stream<OrchestrationV2SearchThreadResult, OrchestratorV2Error>;
@@ -881,11 +873,7 @@ function mayStartSubagentFollowup(
     return (
       command.notification.source.kind !== "monitor" || command.notification.outcome !== "updated"
     );
-  return (
-    command.createdBy === "user" ||
-    command.creationSource === "mcp" ||
-    command.usageLimitContinuationOfRunId !== undefined
-  );
+  return command.createdBy === "user" || command.creationSource === "mcp";
 }
 
 /** Waiting runs only drain post-terminal output; their agent turn is over and still needs a wake. */
@@ -1095,38 +1083,6 @@ function queueTailModelSelection(
         ),
     )?.modelSelection ?? projection.thread.modelSelection
   );
-}
-
-/**
- * The provider's latest run stopped on its usage limit and nothing ran after it.
- * With `now` (automatic starts), a run on another provider since does not lift
- * a reported reset still in the future; an unknown reset is lifted, as transient 429s are.
- */
-function usageLimitHoldsQueue(
-  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "turnItems" | "providerSessions">,
-  providerInstanceId: ModelSelection["instanceId"],
-  now?: DateTime.Utc,
-): boolean {
-  let latestSession: OrchestrationV2ThreadProjection["providerSessions"][number] | undefined;
-  for (const session of projection.providerSessions) {
-    if (
-      session.providerInstanceId === providerInstanceId &&
-      (latestSession === undefined ||
-        DateTime.isGreaterThan(session.updatedAt, latestSession.updatedAt))
-    ) {
-      latestSession = session;
-    }
-  }
-  const limited = usageLimitBlockedRun(
-    projection.runs.filter((run) => run.providerInstanceId === providerInstanceId),
-    projection.turnItems,
-    latestSession?.lastError ?? null,
-  );
-  if (limited === null) return false;
-  if (latestExecutedRun(projection.runs)?.id === limited.id) return true;
-  if (now === undefined) return false;
-  const resetAt = latestRootProviderFailure(limited, projection.turnItems)?.resetAt;
-  return resetAt != null && Date.parse(resetAt) > DateTime.toEpochMillis(now);
 }
 
 function pullRequestSnapshotEndsWatch(
@@ -2605,16 +2561,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         modelSelection,
         providerInstanceId: modelSelection.instanceId,
       };
-      // A limited provider would fail and consume every waiting message.
-      if (
-        usageLimitHoldsQueue(
-          projection,
-          queuedRun.providerInstanceId,
-          options?.userStarted === true ? undefined : yield* DateTime.now,
-        )
-      ) {
-        return;
-      }
       // Waits without a hold: lowering the thread's mode starts the queue again.
       if (isRuntimeModeAbove(projection.thread.runtimeMode, runtimeModeCeiling?.maxRuntimeMode)) {
         return;
@@ -4912,45 +4858,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
 
     const now = yield* DateTime.now;
-    if (command.type === "thread.metadata.update" && command.limitRecovery != null) {
-      const projection = yield* loadProjectionForCommand(
-        command,
-        ["runs", "runtimeRequests", "turnItems"],
-        { turnItemTypes: ["error"] },
-      );
-      const run = usageLimitBlockedRun(projection.runs, projection.turnItems, null);
-      const failure = latestRootProviderFailure(run, projection.turnItems);
-      const resetMs = Date.parse(command.limitRecovery.resetAt);
-      if (command.limitRecovery.snooze === true && resetMs <= DateTime.toEpochMillis(now)) {
-        return yield* new OrchestratorDispatchError({
-          commandId: command.commandId,
-          commandType: command.type,
-          cause: "The reset time has passed. Retry the thread manually.",
-        });
-      }
-      if (thread.settledOverride === "settled") {
-        return yield* new OrchestratorDispatchError({
-          commandId: command.commandId,
-          commandType: command.type,
-          cause: "The thread is settled. Un-settle it to resume at the reset.",
-        });
-      }
-      if (
-        !Number.isFinite(resetMs) ||
-        thread.archivedAt !== null ||
-        run?.id !== command.limitRecovery.runId ||
-        failure?.class !== "usage_limit" ||
-        failure.resetAt !== command.limitRecovery.resetAt ||
-        resetMs <= DateTime.toEpochMillis(run.completedAt ?? run.requestedAt) ||
-        projection.runtimeRequests.some((request) => request.status === "pending")
-      ) {
-        return yield* new OrchestratorDispatchError({
-          commandId: command.commandId,
-          commandType: command.type,
-          cause: "The provider limit changed before recovery could be configured.",
-        });
-      }
-    }
     let restoredUnsettledAt: DateTime.Utc | null | undefined;
     if (command.type === "thread.unsettle" && command.restoreUnsettledAt !== undefined) {
       const parsed =
@@ -5009,21 +4916,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           .map((message) => message.id),
       );
       const userRuns = queuedRuns.filter((run) => !automaticMessageIds.has(run.userMessageId));
-      // User work waiting behind a usage limit cannot start until the reset or the user acts.
-      const latest = latestExecutedRun(projection.runs);
-      const limitRecords =
-        userRuns.length === 0 || latest?.status !== "failed"
-          ? null
-          : yield* loadProjectionForCommand(command, ["turnItems", "providerSessions"], {
-              turnItemTypes: ["error"],
-              turnItemRunIds: [latest.id],
-            });
-      const heldBehindLimit =
-        limitRecords !== null &&
-        userRuns.every((run) =>
-          usageLimitHoldsQueue({ ...limitRecords, runs: projection.runs }, run.providerInstanceId),
-        );
-      if (userRuns.length > 0 && !heldBehindLimit) {
+      if (userRuns.length > 0) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
@@ -5072,10 +4965,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...thread,
             settledOverride: "settled",
             settledAt: alreadySettled ? thread.settledAt : (command.settledAt ?? now),
-            // Settled threads refuse recovery, so an armed resume would stay hidden until un-settled.
-            limitRecovery: thread.limitRecovery
-              ? { ...thread.limitRecovery, autoResume: false, snooze: false }
-              : thread.limitRecovery,
             pullRequests: thread.pullRequests?.map((link) => withPullRequestWatch(link, undefined)),
             unsettledAt: null,
             pinnedAt: null,
@@ -5108,7 +4997,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return {
             ...thread,
             snoozedUntil,
-            limitRecovery: thread.limitRecovery ? { ...thread.limitRecovery, snooze: false } : null,
             snoozedAt: now,
             updatedAt: now,
           };
@@ -5199,42 +5087,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           };
         }
         case "thread.metadata.update": {
-          const previousRecovery =
-            thread.limitRecovery?.runId === command.limitRecovery?.runId &&
-            thread.limitRecovery?.resetAt === command.limitRecovery?.resetAt
-              ? thread.limitRecovery
-              : null;
-          const limitRecovery =
-            command.limitRecovery === undefined
-              ? thread.limitRecovery
-              : command.limitRecovery === null
-                ? null
-                : {
-                    ...command.limitRecovery,
-                    autoResume:
-                      command.limitRecovery.autoResume ?? previousRecovery?.autoResume ?? false,
-                    snooze: command.limitRecovery.snooze ?? previousRecovery?.snooze ?? false,
-                    requestId: command.commandId,
-                  };
           return {
             ...thread,
             ...(command.title === undefined ? {} : { title: command.title, titleRenamed: true }),
-            ...(command.limitRecovery === undefined ? {} : { limitRecovery }),
-            ...(command.limitRecovery !== undefined &&
-            limitRecovery?.snooze === true &&
-            Date.parse(limitRecovery.resetAt) > DateTime.toEpochMillis(now)
-              ? {
-                  snoozedUntil: DateTime.makeUnsafe(limitRecovery.resetAt),
-                  // Recovery updates acknowledge the same stopped run; their timestamps must not trigger fresh failure wakes.
-                  snoozedAt: now,
-                }
-              : command.limitRecovery !== undefined &&
-                  thread.limitRecovery?.snooze &&
-                  thread.snoozedUntil != null &&
-                  DateTime.toEpochMillis(thread.snoozedUntil) ===
-                    Date.parse(thread.limitRecovery.resetAt)
-                ? { snoozedUntil: null, snoozedAt: null, lastSnoozeWakeAt: now }
-                : {}),
             ...(command.branch === undefined ? {} : { branch: command.branch }),
             ...(command.worktreePath === undefined ? {} : { worktreePath: command.worktreePath }),
             ...(command.linkedPullRequest === undefined
@@ -7298,7 +7153,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             keepRunIds: [
               command.manualContinuationOfRunId,
               command.restartContinuationOfRunId,
-              command.usageLimitContinuationOfRunId,
               command.steerFollowUpOfRunId,
               ...(command.dispatchMode.type === "steer_active" ||
               command.dispatchMode.type === "restart_active"
@@ -7377,50 +7231,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
     }
-    if (command.usageLimitContinuationOfRunId !== undefined) {
-      const run = usageLimitBlockedRun(projection.runs, projection.turnItems, null);
-      const failure = latestRootProviderFailure(run, projection.turnItems);
-      const recovery = projection.thread.limitRecovery;
-      const now = yield* DateTime.now;
-      if (
-        run?.id !== command.usageLimitContinuationOfRunId ||
-        failure?.class !== "usage_limit" ||
-        threadShellFromProjection(projection).lastErrorClass !== "usage_limit" ||
-        !recovery?.autoResume ||
-        recovery.requestId !== command.usageLimitRecoveryRequestId ||
-        recovery.runId !== run.id ||
-        recovery.resetAt !== failure.resetAt ||
-        Date.parse(recovery.resetAt) > DateTime.toEpochMillis(now) ||
-        projection.thread.archivedAt !== null ||
-        projection.thread.deletedAt !== null ||
-        projection.thread.settledOverride === "settled" ||
-        projection.thread.providerInstanceId !== run.providerInstanceId ||
-        projection.runtimeRequests.some((request) => request.status === "pending") ||
-        (projection.thread.snoozedUntil != null &&
-          DateTime.toEpochMillis(projection.thread.snoozedUntil) > DateTime.toEpochMillis(now))
-      ) {
-        yield* emit(
-          events,
-          command,
-        )({
-          type: "thread.metadata-updated",
-          threadId: command.threadId,
-          occurredAt: now,
-          payload: {
-            ...projection.thread,
-            ...(recovery?.autoResume &&
-            recovery.requestId === command.usageLimitRecoveryRequestId &&
-            recovery.runId === command.usageLimitContinuationOfRunId &&
-            projection.thread.snoozedUntil != null &&
-            DateTime.toEpochMillis(projection.thread.snoozedUntil) > DateTime.toEpochMillis(now)
-              ? { limitRecovery: { ...recovery, requestId: command.commandId } }
-              : {}),
-          },
-        });
-        return;
-      }
-    }
-
     if (command.restartContinuationOfRunId !== undefined) {
       const source = projection.runs.find((run) => run.id === command.restartContinuationOfRunId);
       if (
@@ -7704,10 +7514,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const freshContext = command.freshContext === true;
     // A result is asked of one whole turn, so a send that declares one never joins a running turn.
     // A run that continues one cut short still owes that run's result.
-    const continuedRunId =
-      command.restartContinuationOfRunId ??
-      command.usageLimitContinuationOfRunId ??
-      command.manualContinuationOfRunId;
+    const continuedRunId = command.restartContinuationOfRunId ?? command.manualContinuationOfRunId;
     const outputSchema =
       command.outputSchema ??
       (continuedRunId === undefined
@@ -8313,9 +8120,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(command.manualContinuationOfRunId === undefined
           ? {}
           : { manualContinuationOfRunId: command.manualContinuationOfRunId }),
-        ...(command.usageLimitContinuationOfRunId === undefined
-          ? {}
-          : { usageLimitContinuationOfRunId: command.usageLimitContinuationOfRunId }),
         ...(continuedTaskId === undefined ? {} : { delegatedTaskId: continuedTaskId }),
         ...(freshContext ? { freshContext: true } : {}),
         ...output,
@@ -8736,9 +8540,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(command.manualContinuationOfRunId === undefined
           ? {}
           : { manualContinuationOfRunId: command.manualContinuationOfRunId }),
-        ...(command.usageLimitContinuationOfRunId === undefined
-          ? {}
-          : { usageLimitContinuationOfRunId: command.usageLimitContinuationOfRunId }),
         ...(dispatchMode.type === "defer_start" && dispatchMode.workspaceStrategy !== undefined
           ? { workspacePreparation: dispatchMode.workspaceStrategy }
           : {}),
@@ -9557,9 +9358,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ...(command.manualContinuationOfRunId === undefined
         ? {}
         : { manualContinuationOfRunId: command.manualContinuationOfRunId }),
-      ...(command.usageLimitContinuationOfRunId === undefined
-        ? {}
-        : { usageLimitContinuationOfRunId: command.usageLimitContinuationOfRunId }),
       ...(continuedTaskId === undefined ? {} : { delegatedTaskId: continuedTaskId }),
       ...wakeWorkStartedAt(projection, command),
       ...output,
@@ -10350,7 +10148,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       parentThreadId === null ||
       (command.notification === undefined &&
         command.createdBy !== "user" &&
-        command.usageLimitContinuationOfRunId === undefined &&
         command.senderThreadId !== undefined &&
         command.senderThreadId !== parentThreadId)
     )
@@ -13575,48 +13372,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   }) {
     const emitEvent = emit(input.events, input.command);
     const { runs, subagents } = input.projection;
-    let { thread } = input.projection;
-    let recovery = thread.limitRecovery;
-    const latest = latestExecutedRun(runs);
-    if (latest?.status === "failed") {
-      const { turnItems } = yield* projectionStore
-        .getThreadRecords(thread.id, ["turnItems"], {
-          turnItemTypes: ["error"],
-          turnItemRunIds: [latest.id],
-        })
-        .pipe(mapDispatchError(input.command));
-      const failure = latestRootProviderFailure(latest, turnItems);
-      if (
-        failure?.class === "usage_limit" &&
-        failure.resetAt != null &&
-        Number.isFinite(Date.parse(failure.resetAt)) &&
-        (recovery?.runId !== latest.id || recovery.resetAt !== failure.resetAt)
-      ) {
-        recovery = {
-          runId: latest.id,
-          resetAt: failure.resetAt,
-          autoResume: false,
-          snooze: false,
-        };
-      }
-    }
-    if (recovery && (recovery !== thread.limitRecovery || recovery.autoResume)) {
-      thread = {
-        ...thread,
-        limitRecovery: {
-          ...recovery,
-          autoResume: false,
-          requestId: input.command.commandId,
-        },
-        updatedAt: input.now,
-      };
-      yield* emitEvent({
-        type: "thread.metadata-updated",
-        threadId: thread.id,
-        occurredAt: input.now,
-        payload: thread,
-      });
-    }
+    const { thread } = input.projection;
     const queuedRuns = runs.filter((run) => run.status === "queued");
     const queuedMessages =
       queuedRuns.length === 0
@@ -16341,21 +16097,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             });
           }
         }
-        const nextRun = selectedRun ?? queuedRunsInDeliveryOrder(projection)[0];
-        if (
-          usageLimitHoldsQueue(
-            projection,
-            nextRun === undefined
-              ? projection.thread.providerInstanceId
-              : queuedRunModelSelection(projection, nextRun).instanceId,
-          )
-        ) {
-          return yield* new OrchestratorDispatchError({
-            commandId: command.commandId,
-            commandType: command.type,
-            cause: "Continue the limited thread before resuming its queue.",
-          });
-        }
         if (worktreeSetupPending(projection)) {
           return yield* new OrchestratorDispatchError({
             commandId: command.commandId,
@@ -17417,37 +17158,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return effectOutbox.awaitSettled(`effect:restart-continuation:${run.id}`).pipe(Effect.ignore);
     }),
     dispatch: dispatchWithReceipt,
-    autoArmLimitRecovery: Effect.fn("OrchestratorV2.autoArmLimitRecovery")(function (input) {
-      return threadDispatch.withLock(
-        input.threadId,
-        Effect.gen(function* () {
-          const thread = yield* projectionStore
-            .getThread(input.threadId)
-            .pipe(
-              Effect.mapError(
-                (cause) => new OrchestratorProjectionError({ threadId: input.threadId, cause }),
-              ),
-            );
-          // Stop or an explicit recovery choice can commit after the sweep reads its candidate.
-          if (
-            thread.limitRecovery?.runId === input.limitRecovery.runId &&
-            thread.limitRecovery.resetAt === input.limitRecovery.resetAt
-          )
-            return;
-          const command = { type: "thread.metadata.update", ...input } as const;
-          // A Stop that reached the run before its limit failure landed had nothing to disarm.
-          const stopped = yield* stopReachedRun(command, input.threadId, input.limitRecovery.runId);
-          yield* dispatchWithReceiptEffect(
-            stopped
-              ? {
-                  ...command,
-                  limitRecovery: { ...input.limitRecovery, autoResume: false, snooze: false },
-                }
-              : command,
-          );
-        }),
-      );
-    }),
     searchThreadStream: (input) =>
       projectionStore
         .searchThreadStream(input)

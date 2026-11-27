@@ -260,7 +260,6 @@ it.effect("a remote policy refresh preserves a newer health result on the regist
         getSnapshot: Ref.get(health),
         refresh: Ref.get(health),
         streamChanges: Stream.empty,
-        applyUsageLimits: () => Effect.void,
         resolveMaintenance: () =>
           Effect.succeed(
             makeManualOnlyProviderMaintenanceCapabilities({ provider: driver, packageName: null }),

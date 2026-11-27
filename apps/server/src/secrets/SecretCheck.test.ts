@@ -134,7 +134,6 @@ const setup = Effect.fn("SecretCheckTest.setup")(function* (
               return snapshot;
             }),
             streamChanges: Stream.empty,
-            applyUsageLimits: () => Effect.void,
           },
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
           textGeneration: {} as ProviderInstance["textGeneration"],

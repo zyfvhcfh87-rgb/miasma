@@ -59,7 +59,6 @@ import { defaultProjectFallbackReadyAtom } from "../state/projects";
 import { useThreadRouteTarget } from "./useThreadRouteTarget";
 import { readUnloadedThreadCount } from "../state/olderSettledShelf";
 import { resolveProjectDefaultProviderModelSelection } from "../providerInstances";
-import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
 
 export const LAST_USED_PROJECT_STORAGE_KEY = "t3code:last-used-project:v1";
 export const lastUsedProjectKeySchema = Schema.NullOr(Schema.String);
@@ -206,25 +205,16 @@ export function createNewThreadHandler(router: AnyRouter) {
       project,
     );
     const configuredDefaultModelSelection = projectSettings.settings.defaultModelSelection ?? null;
-    const fallbackResolution = resolveNewThreadModelSelection({
-      defaultSelection:
-        configuredDefaultModelSelection ??
-        (carryModelSelection || useComposerDraftStore.getState().stickyActiveProvider !== null
-          ? null
-          : resolveProjectDefaultProviderModelSelection(
-              environmentServerConfigs.get(projectRef.environmentId)?.providers ?? [],
-              targetServerSettings,
-              projectRef.projectId,
-            )),
-      fallbackSelection: targetServerSettings.fallbackModelSelection ?? null,
-      providers: environmentServerConfigs.get(projectRef.environmentId)?.providers ?? [],
-      settings: targetServerSettings,
-      projectId: projectRef.projectId,
-      now: Date.now(),
-    });
-    const projectDefaultModelSelection = fallbackResolution.fallback
-      ? fallbackResolution.selection
-      : configuredDefaultModelSelection;
+    const defaultSelection =
+      configuredDefaultModelSelection ??
+      (carryModelSelection || useComposerDraftStore.getState().stickyActiveProvider !== null
+        ? null
+        : resolveProjectDefaultProviderModelSelection(
+            environmentServerConfigs.get(projectRef.environmentId)?.providers ?? [],
+            targetServerSettings,
+            projectRef.projectId,
+          ));
+    const projectDefaultModelSelection = defaultSelection ?? null;
     const defaultRuntimeMode = projectSettings.settings.defaultRuntimeMode;
     const resolveModelSelectionOverride = (destinationDraftId: DraftId) =>
       resolveNewThreadModelSelectionOverride({

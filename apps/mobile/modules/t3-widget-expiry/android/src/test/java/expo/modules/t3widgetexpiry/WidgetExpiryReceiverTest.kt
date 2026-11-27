@@ -23,7 +23,7 @@ class WidgetExpiryReceiverTest {
       System.currentTimeMillis() + 60000,
       System.currentTimeMillis() + 120000
     )
-    WidgetExpiryReceiver.schedule(context, "SubscriptionUsage", deadlines)
+    WidgetExpiryReceiver.schedule(context, "AgentActivity", deadlines)
     val scheduled = shadowOf(alarms).scheduledAlarms.single()
     alarms.cancel(requireNotNull(scheduled.operation))
     assertTrue(shadowOf(alarms).scheduledAlarms.isEmpty())
@@ -38,10 +38,10 @@ class WidgetExpiryReceiverTest {
     val context = RuntimeEnvironment.getApplication()
     WidgetExpiryReceiver.schedule(
       context,
-      "SubscriptionUsage",
+      "AgentActivity",
       longArrayOf(System.currentTimeMillis() + 60000)
     )
-    WidgetExpiryReceiver.schedule(context, "SubscriptionUsage", longArrayOf())
+    WidgetExpiryReceiver.schedule(context, "AgentActivity", longArrayOf())
 
     WidgetExpiryReceiver().onReceive(context, Intent(Intent.ACTION_BOOT_COMPLETED))
 

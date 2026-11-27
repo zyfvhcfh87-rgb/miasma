@@ -1,8 +1,6 @@
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
-import { ChatGptUsageSummary } from "./ChatGptUsageSummary";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { EnvironmentId, USAGE_CONTRACT_VERSION, type UsageProviderKind } from "@t3tools/contracts";
-import { type RouteProp, useIsFocused, useRoute } from "@react-navigation/native";
 import {
   updatingProvidersLabel,
   usageEnvironmentProgress,
@@ -44,16 +42,13 @@ import { SettingsSection } from "../settings/components/SettingsSection";
 import { usageAxisDayLabel, usageAxisHourLabel } from "./usageAxisLabels";
 import { UsageDailyChart } from "./UsageDailyChart";
 import { toggleUsageEnvironment } from "./usageEnvironmentSelection";
-import { useRefreshLimits } from "./UsageLimitsSection";
-import { UsageLimitsSection } from "./UsageLimitsPooled";
 import type { UsageChartMetric } from "./usageChartData";
 import { PROVIDER_LABEL, useProviderColors, useUsageMixColors } from "./usageProviders";
 
-type UsageView = UsageChartMetric | "limits";
+type UsageView = UsageChartMetric;
 const VIEW_OPTIONS = [
   { value: "cost", label: msg("Cost", { $context: "usage view tab" }) },
   { value: "tokens", label: msg("Tokens", { $context: "usage view tab" }) },
-  { value: "limits", label: msg("Limits", { $context: "usage view tab, subscription limits" }) },
 ] as const satisfies readonly { value: UsageView; label: string }[];
 
 const WINDOW_OPTIONS = [
@@ -87,14 +82,10 @@ const MAX_CONTENT_WIDTH = 1080;
 const providerLabel = (provider: UsageProviderKind) => PROVIDER_LABEL[provider];
 
 export function UsageRouteScreen(props: { readonly workspace?: boolean }) {
-  const route = useRoute<RouteProp<{ Usage: { tab?: string } | undefined }, "Usage">>();
-  return <UsageScreen workspace={props.workspace} tabParam={route.params?.tab} />;
+  return <UsageScreen workspace={props.workspace} />;
 }
 
-function UsageScreen(props: {
-  readonly workspace?: boolean;
-  readonly tabParam: string | undefined;
-}) {
+function UsageScreen(props: { readonly workspace?: boolean }) {
   const gt = useGT();
   const m = useMessages();
   const viewOptions = VIEW_OPTIONS.map((option) => ({ ...option, label: m(option.label) }));
@@ -105,18 +96,7 @@ function UsageScreen(props: {
   }));
   const insets = useSafeAreaInsets();
   const headerOnly = use(NativeWorkspaceTabActivityContext)?.headerOnly === true;
-  const [selection, setSelection] = useState(() => ({
-    params: props.tabParam,
-    view: (props.tabParam === "usage" ? "cost" : "limits") as UsageView,
-  }));
-  if (selection.params !== props.tabParam) {
-    setSelection({
-      params: props.tabParam,
-      view: props.tabParam === "usage" ? "cost" : "limits",
-    });
-  }
-  const { view } = selection;
-  const setView = (view: UsageView) => setSelection({ params: props.tabParam, view });
+  const [view, setView] = useState<UsageView>("cost");
   const [measuredWidth, setWidth] = useState(0);
   // A workspace pane knows its width in the render that resizes it; measuring lags a frame.
   const width = useWorkspaceSettledContentWidth() ?? measuredWidth;
@@ -133,11 +113,6 @@ function UsageScreen(props: {
     window,
     selectedEnvironmentIds,
     !headerOnly,
-  );
-  const isFocused = useIsFocused();
-  const limits = useRefreshLimits(
-    selectedEnvironmentIds,
-    isFocused && view === "limits" && !headerOnly,
   );
   const sourceMessages = usageSourceMessages(
     selectedEnvironments.flatMap((environment) => environment.summary?.sources ?? []),
@@ -163,7 +138,6 @@ function UsageScreen(props: {
 
   const [refreshingUsage, setRefreshingUsage] = useState(false);
   const refreshingRef = useRef(false);
-  const showingLimits = view === "limits";
   const metric: UsageChartMetric = view === "tokens" ? "tokens" : "cost";
   const progress = usageProgress(
     selectedEnvironments,
@@ -258,28 +232,21 @@ function UsageScreen(props: {
           contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
           onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
           refreshControl={
-            showingLimits || canReadDiagnostics ? (
-              <RefreshControl
-                refreshing={showingLimits ? limits.refreshing : refreshingUsage}
-                onRefresh={showingLimits ? () => void limits.refresh() : refreshWindow}
-              />
+            canReadDiagnostics ? (
+              <RefreshControl refreshing={refreshingUsage} onRefresh={refreshWindow} />
             ) : undefined
           }
         >
           <View className="w-full gap-6 self-center" style={{ maxWidth: MAX_CONTENT_WIDTH }}>
             {wide ? (
               <View className="flex-row items-center gap-3">
-                {showingLimits ? (
-                  <View className="flex-1" />
-                ) : (
-                  <SegmentedControl
-                    options={windowOptions}
-                    selected={windowDays}
-                    onSelect={selectWindow}
-                    size="compact"
-                    className="flex-1"
-                  />
-                )}
+                <SegmentedControl
+                  options={windowOptions}
+                  selected={windowDays}
+                  onSelect={selectWindow}
+                  size="compact"
+                  className="flex-1"
+                />
                 <SegmentedControl
                   options={viewOptions}
                   selected={view}
@@ -298,109 +265,99 @@ function UsageScreen(props: {
               />
             )}
             <Animated.View
-              key={showingLimits ? "limits" : "usage"}
+              key="usage"
               entering={FadeIn.duration(160).reduceMotion(ReduceMotion.System)}
               className="gap-6"
             >
-              {showingLimits ? (
-                <UsageLimitsSection
-                  now={limits.now}
-                  failedLabels={limits.failedLabels}
-                  selectedEnvironmentIds={selectedEnvironmentIds}
-                  wide={wide}
-                />
-              ) : (
-                <>
-                  {wide ? null : (
-                    <SegmentedControl
-                      options={windowOptions}
-                      selected={windowDays}
-                      onSelect={selectWindow}
-                      size="compact"
-                    />
-                  )}
-                  <ChatGptUsageSummary selectedEnvironmentIds={selectedEnvironmentIds} />
-                  {merged.duplicateSources.length > 0 ? (
-                    <Text className="text-sm text-foreground-muted">
-                      <T>
-                        Counted once across environments sharing a transcript directory:{" "}
-                        <Var>{merged.duplicateSources.join(", ")}</Var>
-                      </T>
-                    </Text>
-                  ) : null}
-                  {isPending ? (
-                    <Text className="py-16 text-center text-base text-foreground-muted">
-                      <T>Scanning provider transcripts…</T>
-                    </Text>
-                  ) : selectedEnvironments.length === 0 ? (
-                    <Text className="py-16 text-center text-base text-foreground-muted">
-                      {environments.length === 0
-                        ? gt("Connect an environment to see usage.")
-                        : gt("Select an environment to see usage.")}
-                    </Text>
-                  ) : !canReadDiagnostics ? (
-                    <View className="gap-2 py-16">
-                      {selectedEnvironments.map((environment) => (
-                        <Text
-                          key={environment.environmentId}
-                          className="text-center text-base text-foreground-muted"
-                        >
-                          {selectedEnvironments.length > 1 ? `${environment.label}: ` : null}
-                          {environment.error}
-                        </Text>
-                      ))}
-                    </View>
-                  ) : (
-                    <>
-                      {sourceMessages.map((message) => (
-                        <Text key={message} className="text-sm text-foreground-muted">
-                          {message}
-                        </Text>
-                      ))}
-                      <UsageUpdating dimmed={progress.dimmed} label={progress.label}>
-                        {wide ? (
-                          <View className="flex-row gap-6">
-                            <View className="w-72 gap-6">
-                              <View className="rounded-[24px] border-continuous bg-grouped-card p-4">
-                                <UsageSummary merged={merged} metric={metric} />
-                              </View>
-                              {providers}
+              <>
+                {wide ? null : (
+                  <SegmentedControl
+                    options={windowOptions}
+                    selected={windowDays}
+                    onSelect={selectWindow}
+                    size="compact"
+                  />
+                )}
+                {merged.duplicateSources.length > 0 ? (
+                  <Text className="text-sm text-foreground-muted">
+                    <T>
+                      Counted once across environments sharing a transcript directory:{" "}
+                      <Var>{merged.duplicateSources.join(", ")}</Var>
+                    </T>
+                  </Text>
+                ) : null}
+                {isPending ? (
+                  <Text className="py-16 text-center text-base text-foreground-muted">
+                    <T>Scanning provider transcripts…</T>
+                  </Text>
+                ) : selectedEnvironments.length === 0 ? (
+                  <Text className="py-16 text-center text-base text-foreground-muted">
+                    {environments.length === 0
+                      ? gt("Connect an environment to see usage.")
+                      : gt("Select an environment to see usage.")}
+                  </Text>
+                ) : !canReadDiagnostics ? (
+                  <View className="gap-2 py-16">
+                    {selectedEnvironments.map((environment) => (
+                      <Text
+                        key={environment.environmentId}
+                        className="text-center text-base text-foreground-muted"
+                      >
+                        {selectedEnvironments.length > 1 ? `${environment.label}: ` : null}
+                        {environment.error}
+                      </Text>
+                    ))}
+                  </View>
+                ) : (
+                  <>
+                    {sourceMessages.map((message) => (
+                      <Text key={message} className="text-sm text-foreground-muted">
+                        {message}
+                      </Text>
+                    ))}
+                    <UsageUpdating dimmed={progress.dimmed} label={progress.label}>
+                      {wide ? (
+                        <View className="flex-row gap-6">
+                          <View className="w-72 gap-6">
+                            <View className="rounded-[24px] border-continuous bg-grouped-card p-4">
+                              <UsageSummary merged={merged} metric={metric} />
                             </View>
-                            <View className="min-w-0 flex-1">
-                              <ChartCard
-                                {...chart}
-                                height={WIDE_CHART_HEIGHT}
-                                fill
-                                title={
-                                  isPast24Hours
-                                    ? metric === "cost"
-                                      ? gt("Hourly cost")
-                                      : gt("Hourly processed tokens")
-                                    : metric === "cost"
-                                      ? gt("Daily cost")
-                                      : gt("Daily processed tokens")
-                                }
-                              />
-                            </View>
-                          </View>
-                        ) : (
-                          <>
-                            <ChartCard {...chart} height={CHART_HEIGHT} />
                             {providers}
-                          </>
-                        )}
-                        <TotalsSection
-                          merged={merged}
-                          isPast24Hours={isPast24Hours}
-                          columns={width >= 900 ? 6 : wide ? 3 : 2}
-                        />
-                        <CostSection merged={merged} wide={wide} />
-                        <ModelsSection merged={merged} metric={metric} columns={wide ? 2 : 1} />
-                      </UsageUpdating>
-                    </>
-                  )}
-                </>
-              )}
+                          </View>
+                          <View className="min-w-0 flex-1">
+                            <ChartCard
+                              {...chart}
+                              height={WIDE_CHART_HEIGHT}
+                              fill
+                              title={
+                                isPast24Hours
+                                  ? metric === "cost"
+                                    ? gt("Hourly cost")
+                                    : gt("Hourly processed tokens")
+                                  : metric === "cost"
+                                    ? gt("Daily cost")
+                                    : gt("Daily processed tokens")
+                              }
+                            />
+                          </View>
+                        </View>
+                      ) : (
+                        <>
+                          <ChartCard {...chart} height={CHART_HEIGHT} />
+                          {providers}
+                        </>
+                      )}
+                      <TotalsSection
+                        merged={merged}
+                        isPast24Hours={isPast24Hours}
+                        columns={width >= 900 ? 6 : wide ? 3 : 2}
+                      />
+                      <CostSection merged={merged} wide={wide} />
+                      <ModelsSection merged={merged} metric={metric} columns={wide ? 2 : 1} />
+                    </UsageUpdating>
+                  </>
+                )}
+              </>
             </Animated.View>
           </View>
         </ScrollView>

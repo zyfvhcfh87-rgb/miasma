@@ -19,7 +19,6 @@ import {
   withMessageContext,
   makeThreadErrorSetter,
 } from "../ChatView.logic";
-import { isUsageLimitsCommand } from "@t3tools/shared/usageLimits";
 import {
   AuthOrchestrationOperateScope,
   DEFAULT_MODEL,
@@ -77,7 +76,6 @@ import {
   restoreFailedDraftThread,
   checkoutPullRequestUrlToLink,
   composerDraftHasUserContent,
-  composerTargetKey,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
@@ -120,7 +118,7 @@ import {
   startAttachmentUpload,
 } from "../../lib/attachmentUploadQueue";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
-import { countPreparingComposerImages, holdComposerSend } from "./preparingComposerImages";
+import { holdComposerSend } from "./preparingComposerImages";
 import { fileAttachmentCapabilityBlockReason } from "./composerAttachmentFiles";
 import { useLinkedEnvironments } from "../../state/peerLinks";
 import { readEnvironmentScope } from "../../state/session";
@@ -152,7 +150,6 @@ import type { useLocalDispatchState } from "./useLocalDispatchState";
 import type { usePendingThreadRequests } from "./usePendingThreadRequests";
 import type { useQueuedRunEdit } from "./useQueuedRunEdit";
 import type { useTimelineFollow } from "./useTimelineFollow";
-import type { useUsageLimitsPanel } from "./useUsageLimitsPanel";
 import type { useWorktreeSetup } from "./useWorktreeSetup";
 
 const ENVIRONMENT_UNAVAILABLE_SEND_TOAST_TRAIL_SIZE = 3;
@@ -187,15 +184,9 @@ function withReplyReference(prompt: string, replyTo: ResponseContextRecord | nul
     : prompt;
 }
 
-function draftHasNonPromptContent(target: ComposerThreadTarget) {
-  const draft = useComposerDraftStore.getState().getComposerDraft(target);
-  return draft ? composerDraftHasUserContent({ ...draft, prompt: "" }) : false;
-}
-
 type PendingThreadRequests = ReturnType<typeof usePendingThreadRequests>;
 type LocalDispatchState = ReturnType<typeof useLocalDispatchState>;
 type DraftEnvironmentRouting = ReturnType<typeof useDraftEnvironmentRouting>;
-type UsageLimitsPanel = ReturnType<typeof useUsageLimitsPanel>;
 type TimelineFollow = ReturnType<typeof useTimelineFollow>;
 
 interface ComposerSendInput {
@@ -246,10 +237,6 @@ interface ComposerSendInput {
   /** `/clear` can arm a fresh session on this thread. */
   readonly freshSessionAvailable: boolean;
   readonly resumeCompactionTokens: number | null;
-  readonly usageLimitsKey: string | null;
-  readonly usageLimitsOffered: boolean;
-  readonly openUsageLimits: UsageLimitsPanel["open"];
-  readonly clearUsageLimitsFor: UsageLimitsPanel["clearFor"];
   readonly needsLoadBalancing: boolean;
   readonly loadBalancing: DraftEnvironmentRouting["loadBalancing"];
   readonly refreshBeforeSend: DraftEnvironmentRouting["refreshBeforeSend"];
@@ -344,10 +331,6 @@ export function useComposerSend(input: ComposerSendInput) {
     keepFullHistory,
     freshSessionAvailable,
     resumeCompactionTokens,
-    usageLimitsKey,
-    usageLimitsOffered,
-    openUsageLimits,
-    clearUsageLimitsFor,
     needsLoadBalancing,
     loadBalancing,
     refreshBeforeSend,
@@ -431,23 +414,6 @@ export function useComposerSend(input: ComposerSendInput) {
     // What the user pressed send on; uploads below can take a while, and a redirect must not
     // decline approvals for a draft that changed meanwhile.
     let promptAtSend = detachedOverride ? detachedOverride.prompt : promptRef.current;
-    if (
-      usageLimitsOffered &&
-      usageLimitsKey !== null &&
-      !directAnnotation &&
-      !draftHasNonPromptContent(composerDraftTarget) &&
-      countPreparingComposerImages(composerTargetKey(composerDraftTarget)) === 0 &&
-      isUsageLimitsCommand(promptAtSend)
-    ) {
-      if (openUsageLimits()) {
-        setComposerDraftPrompt(composerDraftTarget, "");
-        if (currentRouteThreadKeyRef.current === routeThreadKey) {
-          promptRef.current = "";
-          composerRef.current?.resetCursorState();
-        }
-      }
-      return;
-    }
 
     // Read before any wait; the composer on screen may belong to another thread after it.
     let sendCtx = detachedOverride
@@ -1601,7 +1567,6 @@ export function useComposerSend(input: ComposerSendInput) {
         }
         setKeepFullHistory(routeThreadKey, false);
         if (freshArm !== undefined) disarmFreshSession(routeThreadKey, freshArm);
-        clearUsageLimitsFor(routeThreadKey);
         if (turnUsesAttachmentUploads) {
           releaseDraftAttachments(composerAttachmentsSnapshot);
         }

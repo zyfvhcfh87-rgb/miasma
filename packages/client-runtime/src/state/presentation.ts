@@ -166,8 +166,7 @@ export function createEnvironmentPresentationAtoms<E>(input: {
   }).pipe(Atom.withLabel("environment-providers"));
 
   // Enabled environments only, like serverConfigsAtom: a disabled connection keeps its cached
-  // config, and its accounts would otherwise count in usage limits. Usage limits ride on provider
-  // statuses, so these surfaces rebuild on every push by design.
+  // config. These surfaces rebuild on every provider push by design.
   const presentationsWithProvidersAtom = Atom.make((get) => {
     const previous = Option.getOrNull(
       get.self<ReadonlyMap<EnvironmentId, EnvironmentPresentationWithProviders>>(),

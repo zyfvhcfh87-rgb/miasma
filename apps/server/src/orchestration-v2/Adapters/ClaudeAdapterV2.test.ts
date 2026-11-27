@@ -9266,80 +9266,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
-  it.effect("announces usage-limit pauses once per window and again on a new turn", () =>
-    Effect.gen(function* () {
-      const harness = yield* makeWakeHarness;
-      const now = yield* DateTime.now;
-      const resetsAt = Math.floor(DateTime.toEpochMillis(now) / 1000) + 7_200;
-      const limit = (rateLimitType: "five_hour" | "seven_day" = "five_hour") =>
-        claudeSdkFrame({
-          type: "rate_limit_event",
-          rate_limit_info: { status: "rejected", rateLimitType, resetsAt },
-          uuid: "00000000-0000-4000-8000-000000000601",
-          session_id: WAKE_NATIVE_SESSION,
-        });
-      const start = (ordinal: number) =>
-        harness.runtime.startTurn(
-          makeClaudeTestTurnInput({
-            threadId: harness.threadId,
-            providerThread: harness.providerThread,
-            now,
-            attemptId: RunAttemptId.make(`attempt-claude-limit-${ordinal}`),
-            providerTurnOrdinal: ordinal,
-            text: "Continue.",
-            attachments: [],
-          }),
-        );
-      yield* start(1);
-      yield* Queue.offer(harness.sdkMessages, limit());
-      const pause = (yield* Queue.take(harness.systemNoticeReceipts)).turnItem;
-      assert.equal(pause.type, "system_notice");
-      if (pause.type !== "system_notice") return;
-      assert.equal(
-        pause.message,
-        "Claude usage limit reached. This turn is paused until the 5-hour limit resets in 2h.",
-      );
-      assert.lengthOf(harness.terminalEvents(), 0);
-      yield* Queue.offerAll(harness.sdkMessages, [
-        limit(),
-        limit("seven_day"),
-        limit(),
-        makeResultFrame({
-          uuid: "00000000-0000-4000-8000-000000000602",
-          result: "Recovered.",
-        }),
-      ]);
-      yield* Queue.take(harness.terminalReceipts);
-      const notices = () =>
-        harness.events.flatMap((event) =>
-          event.type === "turn_item.updated" && event.turnItem.type === "system_notice"
-            ? [event.turnItem]
-            : [],
-        );
-      assert.lengthOf(notices(), 2);
-      yield* start(2);
-      yield* Queue.offerAll(harness.sdkMessages, [
-        limit(),
-        makeResultFrame({
-          uuid: "00000000-0000-4000-8000-000000000603",
-          result: "Done.",
-        }),
-      ]);
-      yield* Queue.take(harness.terminalReceipts);
-      assert.lengthOf(notices(), 3);
-      assert.notEqual(notices()[0]?.id, notices()[2]?.id);
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          IdAllocator.layer,
-          McpProviderSessions.layer,
-          NodeServices.layer,
-          NodeCrypto.layer,
-        ),
-      ),
-    ),
-  );
-
   it.effect("keeps a later future-window event-supplied Claude reset over the embedded reset", () =>
     Effect.gen(function* () {
       const harness = yield* makeWakeHarness;
@@ -18698,12 +18624,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         if (terminal === undefined || terminal.status !== "failed") return;
         assert.equal(terminal.failure.class, "usage_limit");
         assert.equal(terminal.failure.resetAt, "2026-09-25T01:10:00.000Z");
-        if (standaloneEvent) {
-          const pause = yield* Queue.take(harness.systemNoticeReceipts);
-          assert.equal(pause.turnItem.type, "system_notice");
-          if (pause.turnItem.type !== "system_notice") return;
-          assert.include(pause.turnItem.message, "This turn is paused until the 5-hour limit");
-        }
       }).pipe(
         Effect.provide(
           Layer.mergeAll(

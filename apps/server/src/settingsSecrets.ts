@@ -9,7 +9,6 @@ import {
   type SettingsSecretValue,
   SimlockDeviceHostConfig,
   TextGeneratorConfig,
-  UsageLimitSourceConfig,
   isSecretReference,
   secretSettingsFields,
 } from "@t3tools/contracts";
@@ -46,7 +45,6 @@ const providerSecretFields = new Map([
       [definition.driverKind, secretSettingsFields(definition.settingsSchema)] as const,
   ),
 ]);
-const usageLimitSecretFields = secretSettingsFields(UsageLimitSourceConfig);
 const textGeneratorSecretFields = secretSettingsFields(TextGeneratorConfig);
 const voiceSecretFields = secretSettingsFields(CloudSpeechCredentials);
 const easDeviceHostSecretFields = secretSettingsFields(EasDeviceHostConfig);
@@ -196,21 +194,6 @@ function mapSecretFieldGroups(
     ]),
   ) as ServerSettings["sourceControlHosts"];
 
-  const usageLimitSources = Object.fromEntries(
-    Object.entries(settings.usageLimitSources).map(([id, source]) => [
-      id,
-      mapFields(
-        source,
-        usageLimitSecretFields,
-        (field, serverHost) =>
-          `usage-limit-source-${encode(id)}` +
-          (field === "managementKey" && serverHost === null
-            ? ""
-            : `-${encode(field)}${serverHost === null ? "" : `-${encode(serverHost)}`}`),
-      ),
-    ]),
-  ) as ServerSettings["usageLimitSources"];
-
   const textGenerators = Object.fromEntries(
     Object.entries(settings.textGenerators).map(([id, generator]) => [
       id,
@@ -256,7 +239,6 @@ function mapSecretFieldGroups(
     ) as ServerSettings["cloudSpeechCredentials"],
     providerInstances,
     sourceControlHosts,
-    usageLimitSources,
     textGenerators,
     easDeviceHosts,
     simlockDeviceHosts,

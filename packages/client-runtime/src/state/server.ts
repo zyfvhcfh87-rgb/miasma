@@ -483,8 +483,6 @@ const cachedConfigSnapshotEvent = (config: ServerConfig): ServerConfigStreamEven
 
 export interface ServerConfigSubscriptionOptions {
   readonly environmentThemes?: boolean;
-  readonly usageLimitSources?: boolean;
-  readonly usageLimitsCommand?: boolean;
   readonly providerCatalogsOnDemand?: boolean;
   readonly providerCatalogDigests?: boolean;
   readonly providerStatusDeltas?: boolean;
@@ -600,7 +598,6 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
       // serverTime changes every connect, which would rewrite the cache each time.
       const {
         environmentThemes: _themes,
-        usageLimitSources: _sources,
         lastEventLoopStall: _stall,
         serverTime: _serverTime,
         ...cacheable
@@ -655,8 +652,6 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
     let fetchedCatalogs: ReadonlyArray<FetchedMachineCatalog> = [];
     const configUpdates = subscribe(WS_METHODS.subscribeServerConfig, {
       ...(subscription.environmentThemes === true ? { environmentThemes: true } : {}),
-      ...(subscription.usageLimitSources === true ? { usageLimitSources: true } : {}),
-      ...(subscription.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
       ...(subscription.providerCatalogsOnDemand === true ? { providerCatalogsOnDemand: true } : {}),
       ...(subscription.providerCatalogDigests === true ? { providerCatalogDigests: true } : {}),
       ...(subscription.providerStatusDeltas === true ? { providerStatusDeltas: true } : {}),
@@ -862,8 +857,8 @@ export function resolveServerConfigValue(
 }
 
 /**
- * The provider-wide fields a workspace snapshot builds on. A live session, a sign-out, a
- * /usage-limits change, or a server rescan that changed the skills shows up here, so a snapshot
+ * The provider-wide fields a workspace snapshot builds on. A live session, a sign-out, or a
+ * server rescan that changed the skills shows up here, so a snapshot
  * fetched before it no longer applies.
  */
 const snapshotBasis = (provider: ServerProviderEntry | undefined) =>
@@ -962,8 +957,6 @@ export function createServerEnvironmentAtoms<R, E>(
       environmentId: EnvironmentId,
     ) => Atom.Atom<ServerConfig | null>;
     readonly environmentThemes?: boolean;
-    readonly usageLimitSources?: boolean;
-    readonly usageLimitsCommand?: boolean;
     readonly providerCatalogsOnDemand?: boolean;
     readonly providerCatalogDigests?: boolean;
     readonly providerStatusDeltas?: boolean;
@@ -990,8 +983,6 @@ export function createServerEnvironmentAtoms<R, E>(
           environmentId,
           {
             ...(options.environmentThemes === true ? { environmentThemes: true } : {}),
-            ...(options.usageLimitSources === true ? { usageLimitSources: true } : {}),
-            ...(options.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
             ...(options.providerCatalogsOnDemand === true
               ? { providerCatalogsOnDemand: true }
               : {}),
@@ -1751,15 +1742,6 @@ export function createServerEnvironmentAtoms<R, E>(
           ),
         ),
     }),
-    consumeResetCredit: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:consume-reset-credit",
-      tag: WS_METHODS.providerConsumeResetCredit,
-      concurrency: {
-        mode: "singleFlight",
-        // Both ids are free-form strings; a delimiter could collide.
-        key: ({ environmentId, input }) => JSON.stringify([environmentId, input]),
-      },
-    }),
     refreshProviders: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:refresh-providers",
       tag: WS_METHODS.serverRefreshProviders,
@@ -1779,7 +1761,6 @@ export function createServerEnvironmentAtoms<R, E>(
         return requestGuarded(WS_METHODS.serverRefreshProviders, {
           ...input,
           workspaceSnapshotsOnDemand: true,
-          ...(options.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
           ...(options.providerCatalogsOnDemand === true ? { providerCatalogsOnDemand: true } : {}),
           ...(options.omitRefreshedProviders === true ? { omitProviders: true } : {}),
           // The held lists are stale or missing, so the cwd snapshot brings the current ones.

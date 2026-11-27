@@ -52,7 +52,6 @@ import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import { checkpointRefForScopeOrdinal } from "./orchestration-v2/CheckpointService.ts";
 import { threadHasQueuedTurnStart } from "./orchestration-v2/ThreadSettlementService.ts";
-import { MAX_OVERDUE_ARM_MS } from "./orchestration-v2/UsageLimitRecoveryWorker.ts";
 import * as WorktreeBranchSync from "./orchestration-v2/WorktreeBranchSync.ts";
 import { forkParked } from "./serverActivation.ts";
 import * as Settings from "./serverSettings.ts";
@@ -155,24 +154,11 @@ function sameProjectWorktreePolicies(left: ServerSettings, right: ServerSettings
   );
 }
 
-type LimitRecoverySettings = Pick<
-  ServerSettings,
-  "autoResumeLimitedThreads" | "snoozeLimitedThreads"
->;
-
-export function storageCleanupThreadIdle(
-  thread: OrchestrationV2ThreadShell,
-  now: number,
-  settings: LimitRecoverySettings,
-): boolean {
-  return thread.worktreePath !== null && threadIdle(thread, now, settings);
+export function storageCleanupThreadIdle(thread: OrchestrationV2ThreadShell, now: number): boolean {
+  return thread.worktreePath !== null && threadIdle(thread, now);
 }
 
-function threadIdle(
-  thread: OrchestrationV2ThreadShell,
-  now: number,
-  settings: LimitRecoverySettings,
-): boolean {
+function threadIdle(thread: OrchestrationV2ThreadShell, now: number): boolean {
   return (
     thread.activeRunId === null &&
     (thread.status === "idle" ||
@@ -183,41 +169,8 @@ function threadIdle(
       thread.status === "rolled_back") &&
     (thread.pendingBackgroundTasks?.length ?? 0) === 0 &&
     thread.pendingRuntimeRequest === null &&
-    !threadHasQueuedTurnStart(thread, now) &&
-    !heldForLimitRecovery(thread, now, settings)
+    !threadHasQueuedTurnStart(thread, now)
   );
-}
-
-// A run held for its usage-limit reset has its work still ahead of it, and a
-// fresh worktree would otherwise look unchanged and be removed before it runs.
-function heldForLimitRecovery(
-  thread: OrchestrationV2ThreadShell,
-  now: number,
-  settings: LimitRecoverySettings,
-): boolean {
-  if (
-    thread.status !== "failed" ||
-    thread.lastErrorClass !== "usage_limit" ||
-    !thread.usageLimitResetAt ||
-    thread.archivedAt !== null ||
-    thread.settledOverride === "settled"
-  )
-    return false;
-  const resetMs = Date.parse(thread.usageLimitResetAt);
-  const recovery = thread.limitRecovery;
-  if (recovery?.runId === thread.latestRunId && recovery.resetAt === thread.usageLimitResetAt)
-    // An auto-resume holds until its continuation replaces the failed run.
-    return recovery.autoResume || (recovery.snooze === true && resetMs > now);
-  // The recovery worker arms this failure on a later tick; hold it until then.
-  // Like the worker, skip a reset that had already passed when the run ended
-  // or that is too overdue to arm.
-  if (
-    !Number.isFinite(resetMs) ||
-    resetMs <= DateTime.toEpochMillis(thread.latestRunCompletedAt ?? thread.updatedAt) ||
-    now - resetMs > MAX_OVERDUE_ARM_MS
-  )
-    return false;
-  return settings.autoResumeLimitedThreads || (settings.snoozeLimitedThreads && resetMs > now);
 }
 
 /** PR metadata refreshes must not reset the inactivity clock. */
@@ -266,7 +219,6 @@ function worktreeSettlementChain(
   thread: OrchestrationV2ThreadShell,
   byId: ReadonlyMap<ThreadId, OrchestrationV2ThreadShell>,
   now: number,
-  settings: LimitRecoverySettings,
 ) {
   const chain = [thread];
   let current = thread;
@@ -283,7 +235,7 @@ function worktreeSettlementChain(
       chain.some((member) => member.id === parent.id) ||
       parent.projectId !== thread.projectId ||
       parent.lineage.rootThreadId !== thread.lineage.rootThreadId ||
-      !threadIdle(parent, now, settings)
+      !threadIdle(parent, now)
     )
       return [];
     chain.push(parent);
@@ -1407,9 +1359,7 @@ const make = Effect.gen(function* () {
         pathKey(path.dirname(worktreeKey)) === pathKey(scratchRoot);
       const activityAt = Math.max(...group.map(storageCleanupActivityAt));
       const deleted = "workspaceRoot" in thread;
-      const settlementChain = deleted
-        ? []
-        : worktreeSettlementChain(thread, threadsById, now, serverSettings);
+      const settlementChain = deleted ? [] : worktreeSettlementChain(thread, threadsById, now);
       const settledThread = settlementChain.at(-1);
       const members = deleted ? [thread, ...group] : group;
       const project = deleted
@@ -1456,7 +1406,7 @@ const make = Effect.gen(function* () {
         if (members.length > 1 && worktreeOwner(members) === undefined)
           return keep(`shared by ${members.length} threads`);
         if (project === undefined) return keep("project is unavailable");
-        if (!group.every((member) => storageCleanupThreadIdle(member, now, serverSettings)))
+        if (!group.every((member) => storageCleanupThreadIdle(member, now)))
           return keep(waitForStop("thread is running or has pending work"));
         if (thread.branch === null && !scratch) return keep("thread has no branch");
         if (group.some((member) => member.branch !== thread.branch))
@@ -1562,7 +1512,7 @@ const make = Effect.gen(function* () {
                 shell.branch !== thread.branch ||
                 !Equal.equals(shell.settledAt, previous.settledAt) ||
                 (shell.settledAt !== null && !Equal.equals(shell.updatedAt, previous.updatedAt)) ||
-                !storageCleanupThreadIdle(shell, now, serverSettings) ||
+                !storageCleanupThreadIdle(shell, now) ||
                 latestKeys[index] !== worktreeKey ||
                 storageCleanupActivityAt(shell) !== storageCleanupActivityAt(previous)
               );
@@ -1581,7 +1531,6 @@ const make = Effect.gen(function* () {
                 ),
               ),
               now,
-              serverSettings,
             ).at(-1);
             if (
               latestSettlement?.id !== settledThread?.id ||
@@ -1611,13 +1560,9 @@ const make = Effect.gen(function* () {
         const settingsChangedSinceCheck = Effect.gen(function* () {
           const currentSettings = yield* settingsService.getSettings;
           const current = resolveWorktreeCleanup(currentSettings, thread.projectId);
-          return (
-            currentSettings.autoResumeLimitedThreads !== serverSettings.autoResumeLimitedThreads ||
-            currentSettings.snoozeLimitedThreads !== serverSettings.snoozeLimitedThreads ||
-            Object.keys(settings).some(
-              (key) =>
-                current[key as keyof typeof settings] !== settings[key as keyof typeof settings],
-            )
+          return Object.keys(settings).some(
+            (key) =>
+              current[key as keyof typeof settings] !== settings[key as keyof typeof settings],
           );
         });
         if (scratch) {

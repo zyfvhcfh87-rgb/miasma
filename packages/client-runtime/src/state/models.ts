@@ -122,7 +122,6 @@ export interface ThreadRuntimeSummary {
   readonly lastErrorCode?: string | null;
   /** The record `lastError` came from, with its change time so a repeated failure differs. */
   readonly lastErrorSource?: string | null;
-  readonly usageLimitResetAt?: string | null;
   readonly updatedAt: string;
 }
 
@@ -198,7 +197,6 @@ export interface EnvironmentThreadShell {
   readonly unsettledAt: string | null;
   readonly snoozedUntil: string | null;
   readonly snoozedAt: string | null;
-  readonly limitRecovery?: import("@t3tools/contracts").OrchestrationV2LimitRecovery | null;
   readonly pinnedAt: string | null;
   readonly autoSettleDisabledAt?: string | null;
   readonly pinOrderKey: string | null;
@@ -263,7 +261,6 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
     lastError: thread.lastError ?? null,
     lastErrorClass: thread.lastErrorClass ?? null,
     lastErrorCode: thread.lastErrorCode ?? null,
-    usageLimitResetAt: thread.usageLimitResetAt ?? null,
     updatedAt: iso(thread.updatedAt),
   };
 }
@@ -357,7 +354,6 @@ export function presentThreadShell(
     unsettledAt: nullableIso(thread.unsettledAt ?? null),
     snoozedUntil: nullableIso(thread.snoozedUntil ?? null),
     snoozedAt: nullableIso(thread.snoozedAt ?? null),
-    limitRecovery: thread.limitRecovery ?? null,
     pinnedAt: nullableIso(thread.pinnedAt ?? null),
     autoSettleDisabledAt: nullableIso(thread.autoSettleDisabledAt ?? null),
     pinOrderKey: thread.pinOrderKey ?? null,

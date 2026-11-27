@@ -9,7 +9,6 @@ import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as DateTime from "effect/DateTime";
 import * as Equal from "effect/Equal";
 import * as Option from "effect/Option";
 import * as FileSystem from "effect/FileSystem";
@@ -34,7 +33,6 @@ import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAda
 import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textGeneration";
 import { ProviderDriverError } from "@t3tools/provider-core/server/errors";
 import { openCodeUsageReader, type OpenCodeUsageReaderEnv } from "./usage.ts";
-import { readOpenCodeGoUsageLimits } from "./usageLimits.ts";
 import { loadOpenCode2Catalog, loadOpenCode2DirectoryCatalog } from "./openCode2Catalog.ts";
 import {
   checkOpenCodeProviderStatus,
@@ -279,7 +277,6 @@ export const OpenCodeDriver: ProviderDriver<
     const agentScope = yield* AgentScope;
     const httpClient = yield* HttpClient.HttpClient;
     const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
-    const digest = yield* Digest.Digest;
     const host = yield* ProviderHost.ProviderHost;
     const processEnv = yield* mergeProviderInstanceEnvironment(environment);
     const continuationIdentity = defaultProviderContinuationIdentity({
@@ -490,43 +487,6 @@ export const OpenCodeDriver: ProviderDriver<
       ),
     );
 
-    const legacyUsageLimits = readOpenCodeGoUsageLimits({
-      enabled: effectiveConfig.enabled,
-      serverUrl: effectiveConfig.serverUrl,
-      environment: processEnv,
-    }).pipe(
-      Effect.provideService(FileSystem.FileSystem, fileSystem),
-      Effect.provideService(Path.Path, pathService),
-      Effect.provideService(HttpClient.HttpClient, httpClient),
-      Effect.provideService(Digest.Digest, digest),
-    );
-    let unsupportedUsageVersion: string | undefined;
-    const checkUsageLimits = Effect.gen(function* () {
-      if (!effectiveConfig.enabled) return yield* legacyUsageLimits;
-      const runtime = yield* runtimeProbe.get;
-      if (runtime.generation === "v1" || runtime.version === unsupportedUsageVersion)
-        return yield* legacyUsageLimits;
-      const limits = yield* openCode2Server.withConnection((connection) =>
-        connection.usageLimits(host.paths.cwd),
-      );
-      if (limits === undefined) unsupportedUsageVersion = runtime.version;
-      if (limits !== undefined && limits.unavailable?.reason !== "unsupported") return limits;
-      // Without a Console workspace the server reports nothing, but a local Go key still has usage.
-      const legacy = yield* legacyUsageLimits;
-      return limits !== undefined && legacy.unavailable?.reason === "unsupported" ? limits : legacy;
-    }).pipe(
-      Effect.timeout("10 seconds"),
-      Effect.catch(() =>
-        Effect.map(DateTime.now, (now) => ({
-          checkedAt: DateTime.formatIso(now),
-          windows: [],
-          unavailable: {
-            reason: "probeFailed" as const,
-            message: "OpenCode could not read workspace usage.",
-          },
-        })),
-      ),
-    );
     const checkProvider = Effect.all(
       {
         // A configured loopback server reports its running version. Probe the local
@@ -553,13 +513,11 @@ export const OpenCodeDriver: ProviderDriver<
           Effect.annotateLogs({ providerInstanceId: instanceId }),
           Effect.annotateSpans({ providerInstanceId: instanceId }),
         ),
-        usageLimits: checkUsageLimits,
       },
       { concurrency: "unbounded" },
     ).pipe(
-      Effect.map(({ provider, usageLimits, installedVersion }) => ({
+      Effect.map(({ provider, installedVersion }) => ({
         ...provider,
-        usageLimits,
         ...(installedVersion === undefined ? {} : { installedVersion }),
       })),
       Effect.map(stampIdentity),
@@ -684,7 +642,6 @@ export const OpenCodeDriver: ProviderDriver<
       initialSnapshot: (settings) =>
         makePendingOpenCodeProvider(settings.provider).pipe(Effect.map(stampIdentity)),
       checkProvider,
-      checkUsageLimits,
       enrichSnapshot: ({ settings, snapshot, publishSnapshot }) => {
         let enriched = snapshot;
         let catalog: ReadonlyArray<OpenCode2Model> | undefined;
